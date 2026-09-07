@@ -30,10 +30,17 @@ struct SessionNode {
     response_output: Vec<Value>,
     instructions: String,
     model: String,
+    routing_session_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct SessionParent(Arc<SessionNode>);
+
+impl SessionParent {
+    pub fn routing_session_id(&self) -> &str {
+        &self.0.routing_session_id
+    }
+}
 
 struct StoredSession {
     node: Arc<SessionNode>,
@@ -74,6 +81,7 @@ impl HttpSessionStore {
             Vec::new(),
             entry.instructions,
             entry.model,
+            None,
         );
     }
 
@@ -85,7 +93,9 @@ impl HttpSessionStore {
         response_output: Vec<Value>,
         instructions: String,
         model: String,
+        routing_session_id: Option<String>,
     ) {
+        let routing_session_id = routing_session_id.unwrap_or_else(|| response_id.clone());
         self.sessions.insert(
             response_id,
             StoredSession {
@@ -95,6 +105,7 @@ impl HttpSessionStore {
                     response_output,
                     instructions,
                     model,
+                    routing_session_id,
                 }),
                 last_accessed: Instant::now(),
             },
@@ -164,6 +175,7 @@ pub async fn save_session_delta(
     response_output: Vec<Value>,
     instructions: String,
     model: String,
+    routing_session_id: String,
 ) {
     store().lock().await.insert_delta(
         response_id,
@@ -172,6 +184,7 @@ pub async fn save_session_delta(
         response_output,
         instructions,
         model,
+        Some(routing_session_id),
     );
 }
 
@@ -463,6 +476,7 @@ mod tests {
             vec![json!({"id": "out-second", "content": "answer"})],
             "be concise".to_string(),
             "gemini-3.7-flash-high".to_string(),
+            Some("routing-root".to_string()),
         );
 
         let (previous, _) = store.get("resp-2").expect("child");
@@ -487,6 +501,7 @@ mod tests {
             Vec::new(),
             String::new(),
             String::new(),
+            Some("routing-root".to_string()),
         );
         store.insert_delta(
             "resp-b".to_string(),
@@ -495,11 +510,20 @@ mod tests {
             Vec::new(),
             String::new(),
             String::new(),
+            Some("routing-root".to_string()),
         );
 
         let parent_a = store.sessions["resp-a"].node.parent.as_ref().unwrap();
         let parent_b = store.sessions["resp-b"].node.parent.as_ref().unwrap();
         assert!(Arc::ptr_eq(parent_a, parent_b));
+        assert_eq!(
+            store.sessions["resp-a"].node.routing_session_id,
+            "routing-root"
+        );
+        assert_eq!(
+            store.sessions["resp-b"].node.routing_session_id,
+            "routing-root"
+        );
     }
 
     #[test]

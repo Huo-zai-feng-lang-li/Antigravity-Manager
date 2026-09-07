@@ -1156,7 +1156,7 @@ impl TokenManager {
         account_json["proxy_disabled_at"] = serde_json::Value::Null;
 
         let threshold = config.threshold_percentage as i32;
-        let mut protected_list = Vec::new();
+        let mut protected_list: Vec<serde_json::Value> = Vec::new();
 
         if let Some(models) = quota.get("models").and_then(|m| m.as_array()) {
             let mut group_max_percentage: HashMap<String, i32> = HashMap::new();

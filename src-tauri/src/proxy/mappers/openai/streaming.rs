@@ -1282,6 +1282,7 @@ mod tests {
                 outputs,
                 String::new(),
                 "gemini-pro-agent".to_string(),
+                "routing-test-session".to_string(),
             )
             .await;
             ack_tx.send(()).expect("acknowledge session save");
@@ -1318,6 +1319,25 @@ mod tests {
 
         assert!(saw_completed);
         assert!(raw.contains(&format!("\"id\":\"{response_id}\"")));
+    }
+
+    #[test]
+    fn response_branches_store_signatures_under_their_own_response_ids() {
+        let branch_a = format!("resp-signature-a-{}", uuid::Uuid::new_v4());
+        let branch_b = format!("resp-signature-b-{}", uuid::Uuid::new_v4());
+        let signature_a = "a".repeat(64);
+        let signature_b = "b".repeat(64);
+        store_thought_signature(&signature_a, &branch_a, 1);
+        store_thought_signature(&signature_b, &branch_b, 1);
+
+        assert_eq!(
+            crate::proxy::SignatureCache::global().get_session_signature(&branch_a),
+            Some(signature_a)
+        );
+        assert_eq!(
+            crate::proxy::SignatureCache::global().get_session_signature(&branch_b),
+            Some(signature_b)
+        );
     }
 
     #[tokio::test]

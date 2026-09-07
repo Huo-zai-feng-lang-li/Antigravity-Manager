@@ -996,6 +996,14 @@ mod stream_peek_tests {
     }
 
     #[test]
+    fn responses_store_defaults_to_enabled_and_honors_explicit_false() {
+        assert!(super::responses_store_enabled(&json!({})));
+        assert!(super::responses_store_enabled(&json!({"store": true})));
+        assert!(super::responses_store_enabled(&json!({"store": null})));
+        assert!(!super::responses_store_enabled(&json!({"store": false})));
+    }
+
+    #[test]
     fn responses_created_with_null_error_is_not_an_error_event() {
         let chunk = br#"event: response.created
 data: {"type":"response.created","response":{"status":"in_progress","error":null}}
@@ -2857,6 +2865,10 @@ fn web_tools_guidance_message() -> Value {
 
 // --- END Codex GUIDANCE PROMPTS ---
 
+fn responses_store_enabled(body: &Value) -> bool {
+    body.get("store").and_then(Value::as_bool) != Some(false)
+}
+
 /// 处理 Legacy Completions API (/v1/completions)
 /// 将 Prompt 转换为 Chat Message 格式，复用 handle_chat_completions
 pub async fn handle_completions(
@@ -2873,6 +2885,7 @@ pub async fn handle_completions(
         debug_logger::is_enabled(&debug_cfg).then(|| debug_value_without_inline_data(&body));
     let is_responses_api = uri.path() == "/v1/responses";
     let is_codex_style = body.get("input").is_some() || body.get("instructions").is_some();
+    let store_response = responses_store_enabled(&body);
 
     // [MULTI-TURN] 支持 previous_response_id 链式历史恢复
     // 当客户端通过 HTTP POST /v1/responses 传入 previous_response_id 时，
@@ -2909,13 +2922,14 @@ pub async fn handle_completions(
                 crate::proxy::http_session_store::get_session_with_parent(prev_id).await
             {
                 stored_routing_session_id = Some(parent.routing_session_id().to_string());
-                let prepared = crate::proxy::http_session_store::prepare_session_input(
+                let prepared = crate::proxy::http_session_store::prepare_session_input_with_storage(
                     session.input_items,
                     existing_input,
                     &http_tool_call_cache,
+                    store_response,
                 );
                 session_delta_input = prepared.delta;
-                if !prepared.reset_parent {
+                if store_response && !prepared.reset_parent {
                     session_parent = Some(parent);
                 }
                 if let Some(obj) = body.as_object_mut() {
@@ -2933,11 +2947,15 @@ pub async fn handle_completions(
                 );
                 prepared.merged
             } else {
-                session_delta_input = existing_input.clone();
+                if store_response {
+                    session_delta_input = existing_input.clone();
+                }
                 existing_input
             }
         } else {
-            session_delta_input = existing_input.clone();
+            if store_response {
+                session_delta_input = existing_input.clone();
+            }
             existing_input
         };
 
@@ -2974,13 +2992,13 @@ pub async fn handle_completions(
                 _ => None,
             })
             .unwrap_or_default();
-        bounded_session_input = Some(
+        bounded_session_input = store_response.then(|| {
             session_delta_input
                 .drain(..)
                 .filter_map(into_history_without_inline_media)
                 .filter(|item| !item.is_null())
-                .collect(),
-        );
+                .collect()
+        });
 
         let mut messages = Vec::new();
 
@@ -3451,7 +3469,14 @@ pub async fn handle_completions(
                 _ => None,
             })
             .unwrap_or_default();
-        (input, instructions)
+        (
+            input,
+            if store_response {
+                instructions
+            } else {
+                String::new()
+            },
+        )
     } else {
         (Vec::new(), String::new())
     };
@@ -3943,8 +3968,13 @@ pub async fn handle_completions(
                     let mut session_completion_rx = None;
                     let mut openai_stream = if is_codex_style {
                         use crate::proxy::mappers::openai::streaming::create_codex_sse_stream;
-                        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-                        session_completion_rx = Some(completion_rx);
+                        let completion_tx = if store_response {
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            session_completion_rx = Some(rx);
+                            Some(tx)
+                        } else {
+                            None
+                        };
                         create_codex_sse_stream(
                             gemini_stream,
                             openai_req.model.clone(),
@@ -3952,7 +3982,8 @@ pub async fn handle_completions(
                             message_count,
                             assistant_turn_index,
                             response_id_for_save.clone(),
-                            Some(completion_tx),
+                            completion_tx,
+                            store_response,
                         )
                     } else {
                         use crate::proxy::mappers::openai::streaming::create_legacy_sse_stream;
@@ -4187,16 +4218,18 @@ pub async fn handle_completions(
                                     .into_iter()
                                     .filter_map(into_history_without_inline_media)
                                     .collect();
-                                crate::proxy::http_session_store::save_session_delta(
-                                    response_id_for_save.clone(),
-                                    session_parent,
-                                    session_save_input,
-                                    outputs,
-                                    session_save_instructions,
-                                    openai_req.model.clone(),
-                                    routing_session_id.clone(),
-                                )
-                                .await;
+                                if store_response {
+                                    crate::proxy::http_session_store::save_session_delta(
+                                        response_id_for_save.clone(),
+                                        session_parent,
+                                        session_save_input,
+                                        outputs,
+                                        session_save_instructions,
+                                        openai_req.model.clone(),
+                                        routing_session_id.clone(),
+                                    )
+                                    .await;
+                                }
                                 if debug_logger::is_enabled(&debug_cfg) {
                                     let payload = json!({
                                         "kind": "exchange_summary",

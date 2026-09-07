@@ -1333,6 +1333,12 @@ pub fn transform_openai_request(
         }
     }
 
+    // Match the Gemini entrypoint: every upstream attempt gets a unique request ID.
+    // Reusing session/message-count IDs can pin later requests to an earlier 429 result.
+    let timestamp_ms = chrono::Utc::now().timestamp_millis();
+    let random_hex = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let request_id = format!("agent/{}/{}", timestamp_ms, random_hex);
+
     let mut final_body = json!({
         "project": project_id,
         // [CACHE] 使用重排后的字段顺序，稳定前缀在前
@@ -1341,8 +1347,8 @@ pub fn transform_openai_request(
         "userAgent": "antigravity",
         // [CHANGED v4.1.24] Use "agent" for all non-image requests (matches official client)
         "requestType": if config.request_type == "image_gen" { "image_gen" } else { "agent" },
-        // [CACHE] requestId 移到末尾避免动态 message_count 破坏前缀字节一致性
-        "requestId": format!("agent/antigravity/{}/{}", &session_id[..session_id.len().min(8)], message_count),
+        // [CACHE] requestId stays last so its per-attempt value does not disturb the stable prefix.
+        "requestId": request_id,
     });
 
     // [CACHE:L3] 使用多层级缓存的 compute_prefix_hash 计算组合哈希
@@ -1414,6 +1420,31 @@ fn enforce_uppercase_types(value: &mut Value) {
 mod tests {
     use super::*;
     use crate::proxy::mappers::openai::models::*;
+
+    #[test]
+    fn test_openai_request_id_is_unique_per_upstream_attempt() {
+        let req: OpenAIRequest = serde_json::from_value(json!({
+            "model": "gemini-3.7-flash-high",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .unwrap();
+
+        let (first, _, _, _) =
+            transform_openai_request(&req, "test-project", "gemini-3.7-flash-high", None);
+        let (second, _, _, _) =
+            transform_openai_request(&req, "test-project", "gemini-3.7-flash-high", None);
+        let first_id = first["requestId"].as_str().unwrap();
+        let second_id = second["requestId"].as_str().unwrap();
+
+        assert_ne!(first_id, second_id);
+
+        let parts = first_id.split('/').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "agent");
+        assert!(parts[1].parse::<i64>().is_ok());
+        assert_eq!(parts[2].len(), 8);
+        assert!(parts[2].chars().all(|c| c.is_ascii_hexdigit()));
+    }
 
     #[test]
     #[test]

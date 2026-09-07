@@ -20,6 +20,8 @@
             -   **分级 Flash 思考档位精准映射**: 识别分级 Flash 模型的 `reasoning_effort` 参数并映射到上游 Gemini 的 `thinkingLevel` 配置。
         -   **[Claude 协议标准] 规范 message_start 事件始终包含 usage 字段 (PR #3397)**:
             -   **首包 usage 兜底填充**: 当上游开源模型首个数据块不含 Token 统计元数据时，自动向 `message_start` 事件注入 `{input_tokens: 0, output_tokens: 0}` 兜底对象，彻底解决 OpenCode / `@ai-sdk/anthropic` 等严格校验客户端的类型崩溃问题。
+        -   **[HTTP API & CLI] 修复 /accounts/switch 丢失 targetIde 导致 agy 刷新 Token 意外重启 IDE (Issue #3399)**:
+            -   **透传 targetIde 激活免杀免重启通道**: 修复 `POST /accounts/switch` 请求体丢失 `target_ide` 字段并硬编码传 `None` 的缺陷。现支持解析可选的 `targetIde` 参数（如 `"agy"`），使自动化流水线或 CLI 刷新凭据时仅写系统 Keyring，避免强制杀死并重启正在运行的 Antigravity IDE。
     *   **v4.6.8 (2026-09-06)**:
         -   **[核心修复] 彻底修复冷启动无条件 VACUUM 导致磁盘 I/O 饱和与日志保留时间戳单位错误 (Issue #3386)**:
             -   **对齐保留清理时间戳毫秒单位**: 修复此前因清理函数 `cleanup_old_logs` 使用秒级时间戳（`timestamp()`）计算 30 天截断点，而请求日志存储使用毫秒时间戳（`timestamp_millis()`），导致过期判断永远无法命中、旧日志从未被清理且数据库只增不减的缺陷。统一基准为毫秒级计算（`now.timestamp_millis() - days * 24 * 3600 * 1000`）。

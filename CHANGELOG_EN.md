@@ -20,6 +20,8 @@
             -   **Map Tiered Flash Reasoning Effort**: Accurately maps OpenAI `reasoning_effort` parameters to upstream Gemini `thinkingLevel` for tiered Flash models.
         -   **[Claude Protocol Compliance] Always Include usage Object in message_start Event (PR #3397)**:
             -   **Fallback Usage Object**: When upstream models lack usage metadata in the first chunk, emits a zero-value `usage` object (`{input_tokens: 0, output_tokens: 0}`) to prevent type validation errors on strict clients like OpenCode and `@ai-sdk/anthropic`.
+        -   **[HTTP API & CLI] Fix /accounts/switch Dropping targetIde Causing IDE Restarts on agy Token Refreshes (Issue #3399)**:
+            -   **Pass Through targetIde to Bypass IDE Restarts**: Resolved an issue where `POST /accounts/switch` omitted the `target_ide` field and hardcoded `None`, preventing agy CLI and automation scripts from hitting the pre-existing keyring-only fast path. Passing `{"targetIde": "agy"}` now updates credentials quietly without killing and relaunching the running Antigravity IDE.
     *   **v4.6.8 (2026-09-06)**:
         -   **[Core Fix] Fix Startup Unconditional VACUUM Disk Saturation & Retention Timestamp Unit Bug (Issue #3386)**:
             -   **Align Retention Timestamp to Milliseconds**: Fixed an issue where `cleanup_old_logs` calculated the 30-day cutoff using seconds (`timestamp()`) while request logs were stored in milliseconds (`timestamp_millis()`), causing expiration queries to never match and old logs to never be purged. Unified retention cutoff calculations to milliseconds (`now.timestamp_millis() - days * 24 * 3600 * 1000`).

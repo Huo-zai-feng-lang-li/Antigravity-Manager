@@ -1653,7 +1653,12 @@ mod tests {
             &routing_session_id,
             Some(&previous_response_id),
         );
-        let tool_part = body["request"]["contents"][0]["parts"]
+        let contents = body["request"]["contents"].as_array().unwrap();
+        let model_msg = contents
+            .iter()
+            .find(|c| c["role"] == "model")
+            .expect("Should find model role message");
+        let tool_part = model_msg["parts"]
             .as_array()
             .unwrap()
             .iter()

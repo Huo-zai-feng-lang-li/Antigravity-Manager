@@ -5,6 +5,27 @@ use crate::proxy::token_manager::ProxyToken;
 
 use serde_json::{json, Value};
 
+pub(crate) fn is_tiered_flash_model(model: &str) -> bool {
+    let model_id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    model_id
+        .strip_prefix("gemini-")
+        .and_then(|rest| rest.strip_suffix("-flash-tiered"))
+        .is_some_and(|version| !version.is_empty())
+}
+
+fn tiered_flash_thinking_level(effort: Option<&str>) -> Option<&'static str> {
+    match effort {
+        Some("low") => Some("LOW"),
+        Some("medium") => Some("MEDIUM"),
+        Some("high") => Some("HIGH"),
+        _ => None,
+    }
+}
+
 /// 清洗 system instruction 中的动态内容，确保跨请求的前缀字节一致性
 /// 以便触发 Gemini 隐式前缀缓存（Prefix Cache）。
 ///
@@ -947,6 +968,21 @@ pub fn transform_openai_request(
         }
     }
 
+    // Tiered Flash models select the upstream thinking level directly. This intentionally
+    // replaces the budget-based config above and leaves the upstream model ID untouched.
+    if is_tiered_flash_model(mapped_model) {
+        let mut thinking_config = json!({ "includeThoughts": true });
+        if let Some(level) = tiered_flash_thinking_level(
+            request
+                .reasoning
+                .as_ref()
+                .and_then(|reasoning| reasoning.effort.as_deref()),
+        ) {
+            thinking_config["thinkingLevel"] = json!(level);
+        }
+        gen_config["thinkingConfig"] = thinking_config;
+    }
+
     // [FIX] Cap maxOutputTokens to prevent 400 Invalid Argument
     if let Some(val) = gen_config["maxOutputTokens"].as_i64() {
         let model_lower = mapped_model.to_lowercase();
@@ -1414,6 +1450,68 @@ fn enforce_uppercase_types(value: &mut Value) {
 mod tests {
     use super::*;
     use crate::proxy::mappers::openai::models::*;
+
+    fn tiered_request_body(model: &str, effort: Option<&str>) -> Value {
+        let mut raw = json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "test"}]
+        });
+        if let Some(effort) = effort {
+            raw["reasoning"] = json!({ "effort": effort });
+        }
+        let request: OpenAIRequest = serde_json::from_value(raw).unwrap();
+        transform_openai_request(&request, "test-project", model, None).0
+    }
+
+    #[test]
+    fn tiered_flash_maps_supported_effort_to_thinking_level_without_rewriting_model() {
+        for model in ["gemini-3.8-flash-tiered", "gemini-9.9-flash-tiered"] {
+            assert!(is_tiered_flash_model(model));
+            for (effort, expected_level) in [("low", "LOW"), ("medium", "MEDIUM"), ("high", "HIGH")]
+            {
+                let body = tiered_request_body(model, Some(effort));
+                let thinking = &body["request"]["generationConfig"]["thinkingConfig"];
+
+                assert_eq!(body["model"], model);
+                assert_eq!(thinking["includeThoughts"], true);
+                assert_eq!(thinking["thinkingLevel"], expected_level);
+                assert!(thinking.get("thinkingBudget").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn tiered_flash_leaves_level_unset_for_missing_or_unsupported_effort() {
+        for effort in [
+            None,
+            Some("none"),
+            Some("xhigh"),
+            Some("max"),
+            Some("custom"),
+        ] {
+            let body = tiered_request_body("gemini-3.8-flash-tiered", effort);
+            let thinking = &body["request"]["generationConfig"]["thinkingConfig"];
+
+            assert_eq!(body["model"], "gemini-3.8-flash-tiered");
+            assert_eq!(thinking["includeThoughts"], true);
+            assert!(thinking.get("thinkingLevel").is_none());
+            assert!(thinking.get("thinkingBudget").is_none());
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_does_not_select_levels_for_pro_or_ordinary_flash() {
+        for model in ["gemini-3.1-pro-high", "gemini-3.8-flash"] {
+            assert!(!is_tiered_flash_model(model));
+            let body = tiered_request_body(model, Some("low"));
+            let thinking = &body["request"]["generationConfig"]["thinkingConfig"];
+
+            assert_eq!(body["model"], model);
+            assert!(thinking.get("thinkingLevel").is_none());
+            assert!(thinking.get("thinkingBudget").is_some());
+        }
+        assert!(!is_tiered_flash_model("gemini-3.8-flash-tiered-image"));
+    }
 
     #[test]
     #[test]

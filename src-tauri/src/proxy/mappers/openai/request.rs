@@ -186,6 +186,26 @@ pub fn transform_openai_request(
     mapped_model: &str,
     token: Option<&ProxyToken>,
 ) -> (Value, String, usize, String) {
+    let session_id =
+        crate::proxy::session_manager::SessionManager::extract_openai_session_id(request);
+    transform_openai_request_with_session(
+        request,
+        project_id,
+        mapped_model,
+        token,
+        &session_id,
+        Some(&session_id),
+    )
+}
+
+pub fn transform_openai_request_with_session(
+    request: &OpenAIRequest,
+    project_id: &str,
+    mapped_model: &str,
+    token: Option<&ProxyToken>,
+    routing_session_id: &str,
+    signature_read_key: Option<&str>,
+) -> (Value, String, usize, String) {
     let remember_cwd =
         |text: &str| crate::proxy::adapters::apply_patch_preflight::remember_cwd_from_text(text);
     let found_cwd = request.instructions.as_deref().is_some_and(remember_cwd);
@@ -213,8 +233,7 @@ pub fn transform_openai_request(
         }
     }
 
-    let session_id =
-        crate::proxy::session_manager::SessionManager::extract_openai_session_id(request);
+    let session_id = routing_session_id.to_string();
     let message_count = request.messages.len();
     // 将 OpenAI 工具转为 Value 数组以便探测
     let tools_val = request
@@ -290,8 +309,8 @@ pub fn transform_openai_request(
     let mut actual_include_thinking = is_thinking_model || user_enabled_thinking;
 
     // [REFACTORED] 使用 SignatureCache 获取 Session 级别的签名
-    let session_thought_sig =
-        crate::proxy::SignatureCache::global().get_session_signature(&session_id);
+    let session_thought_sig = signature_read_key
+        .and_then(|key| crate::proxy::SignatureCache::global().get_session_signature(key));
 
     if is_claude_thinking && has_incompatible_assistant_history {
         tracing::warn!("[OpenAI-Thinking] Incompatible assistant history detected for Claude thinking model (missing reasoning_content). Disabling thinking for this request to avoid 400 signature error. (sid: {})", session_id);
@@ -1248,7 +1267,6 @@ pub fn transform_openai_request(
             global_prompt,
             &config.request_type,
             mapped_model,
-            &session_id,
         );
 
     // [FIX] Inject explicit tool mapping instructions for Gemini to read SKILL.md
@@ -1414,6 +1432,84 @@ fn enforce_uppercase_types(value: &mut Value) {
 mod tests {
     use super::*;
     use crate::proxy::mappers::openai::models::*;
+
+    #[test]
+    fn responses_session_identity_is_not_written_into_system_instruction() {
+        let req: OpenAIRequest = serde_json::from_value(json!({
+            "model": "gemini-3.7-flash-high",
+            "messages": [{"role": "user", "content": "same first message"}]
+        }))
+        .unwrap();
+
+        let (body, session_id, _, _) = transform_openai_request_with_session(
+            &req,
+            "test-project",
+            "gemini-3.7-flash-high",
+            None,
+            "resp-routing-root",
+            None,
+        );
+        let system_instruction = body["request"]["systemInstruction"].to_string();
+
+        assert_eq!(session_id, "resp-routing-root");
+        assert!(system_instruction.contains("Request type:"));
+        assert!(system_instruction.contains("Mapped model:"));
+        assert!(!system_instruction.contains("Session ID:"));
+        assert!(!system_instruction.contains("resp-routing-root"));
+    }
+
+    #[test]
+    fn responses_reads_the_parent_signature_instead_of_the_routing_identity() {
+        let previous_response_id = format!("resp-parent-{}", uuid::Uuid::new_v4());
+        let routing_session_id = format!("resp-root-{}", uuid::Uuid::new_v4());
+        let signature = "parent-signature-".repeat(8);
+        crate::proxy::SignatureCache::global().cache_session_signature(
+            &previous_response_id,
+            signature.clone(),
+            1,
+        );
+        let request = OpenAIRequest {
+            model: "gemini-3.7-flash-high".to_string(),
+            messages: vec![OpenAIMessage {
+                role: "assistant".to_string(),
+                content: None,
+                reasoning_content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call-parent".to_string(),
+                    r#type: "function".to_string(),
+                    function: Some(ToolFunction {
+                        name: "test_tool".to_string(),
+                        arguments: "{}".to_string(),
+                    }),
+                    status: None,
+                    call_id: None,
+                    operation: None,
+                }]),
+                tool_call_id: None,
+                name: None,
+                refusal: None,
+            }],
+            ..Default::default()
+        };
+
+        let (body, returned_session_id, _, _) = transform_openai_request_with_session(
+            &request,
+            "test-project",
+            "gemini-3.7-flash-high",
+            None,
+            &routing_session_id,
+            Some(&previous_response_id),
+        );
+        let tool_part = body["request"]["contents"][0]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|part| part.get("functionCall").is_some())
+            .unwrap();
+
+        assert_eq!(returned_session_id, routing_session_id);
+        assert_eq!(tool_part["thoughtSignature"], signature);
+    }
 
     #[test]
     #[test]

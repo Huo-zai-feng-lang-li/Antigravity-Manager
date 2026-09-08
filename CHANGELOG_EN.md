@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.6.10 (2026-09-08)**:
+        -   **[Core Feature] Cloudflare Named Tunnel Automated Orchestration, Edge Buffer-Bypassing, and Custom Domain UI Display**:
+            -   **Custom Domain Persistence & UI Display**: Added `custom_domain` field support in `CloudflaredConfig` and frontend `ApiProxy.tsx`. In Named Tunnel (Auth) mode, the configured public gateway domain is persisted and immediately displayed upon tunnel activation, resolving an issue where the tunnel URL remained blank due to log regex capture misses.
+            -   **SSE Streaming Anti-Buffering & Edge Performance**: Fully automated Cloudflare Named Tunnel ingress orchestration and Ruleset edge cache bypass rules, eliminating buffering stalls for LLM Server-Sent Events (SSE) streaming; activated HTTP/2 multiplexing, HTTP/3 (QUIC), and 0-RTT rapid handshakes.
+            -   **Optimized Cloudflare Edge IP Benchmarking**: Validated and supported low-latency domestic edge IP routing, compressing TCP physical handshake latency down to sub-100ms (measured at 94ms).
+        -   **[CI/CD Build Fix] Fix Minisign Public Key Truncation in Tauri Updater Configuration**:
+            -   **Minisign Key Integrity**: Resolved Base64 decoding failure (`failed to convert updater pubkey: Base64 conversion failed`) caused by a truncated `plugins.updater.pubkey` string in `tauri.conf.json`, unblocking automated cross-platform Release builds.
     *   **v4.6.9 (2026-09-08)**:
         -   **[Core Fix] Honor store:false to Inhibit HTTP Session & Global Tool Call Cache Retention (PR #3408)**:
             -   **Respect store:false Parameter**: When full-replay requests explicitly pass `store:false` in the HTTP Responses path, avoids creating redundant session snapshots and background save tasks, significantly reducing memory growth during large-context replays.

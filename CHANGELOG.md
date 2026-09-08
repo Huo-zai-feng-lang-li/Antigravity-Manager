@@ -3,6 +3,13 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.6.10 (2026-09-08)**:
+        -   **[核心特性] Cloudflare 命名隧道 (Named Tunnel) 自动化编排、防缓冲与自定义域名回显**:
+            -   **自定义域名回显与持久化**: 在 `CloudflaredConfig` 与前端 `ApiProxy.tsx` 中新增 `custom_domain` 字段支持，命名隧道模式（Auth 模式）启动时直接回显绑定的公网网关地址，修复此前依赖日志正则抓取导致命名隧道 URL 显示空白的缺陷。
+            -   **流式输出防缓冲与边缘性能优化**: 全自动编排 Cloudflare 命名隧道 Ingress 规则，集成 Rulesets 边缘 Bypass Cache 规则，彻底消除大模型 SSE 流式输出卡顿；激活 HTTP/2 长连接、HTTP/3 (QUIC) 与 0-RTT 极速握手。
+            -   **优选 IP 测速与极速节点支持**: 验证并支持国内优选节点直连，将 TCP 物理握手延迟进一步压缩至 100ms 以内（实测 94ms）。
+        -   **[CI/CD 构建修复] 修复 Tauri Updater Minisign 公钥截断导致 GitHub Actions 打包失败**:
+            -   **修复 Minisign 密钥完整性**: 修复 `tauri.conf.json` 中 `plugins.updater.pubkey` 缺少字符导致的 Base64 解码异常（`failed to convert updater pubkey: Base64 conversion failed`），恢复全平台 Release 自动化打包构建。
     *   **v4.6.9 (2026-09-08)**:
         -   **[核心修复] 遵循 store:false 抑制 HTTP 会话持久化与全局工具调用缓存驻留 (PR #3408)**:
             -   **严格响应 store:false 参数**: 在 HTTP Responses 代理路径中，当全量重放（full-replay）请求显式传入 `store:false` 时，不再创建多余的会话快照与后台保存任务，大幅抑制大长文本重放时内存持续攀升。

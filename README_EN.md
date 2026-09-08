@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.9)
+> Professional AI Account Management & Protocol Proxy System (v4.6.10)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.9-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.10-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -437,7 +437,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.6.9** (2026-09-08): Comprehensive multi-protocol agent stability enhancements: decoupled Responses session routing & signature keys, honor store:false to eliminate memory leaks, fixed 429 failover loops & circuit breaker bypass, added Gemini first-turn user primer resolving autonomous agent 400 turn errors, and supported /accounts/switch targetIde to avoid unwanted IDE restarts.
+> Latest version **v4.6.10** (2026-09-08): Cloudflare Named Tunnel automated orchestration, custom domain persistence & display, edge buffer-bypassing for SSE streams, and Cloudflare best-latency node optimization support.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

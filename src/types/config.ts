@@ -162,6 +162,7 @@ export interface CloudflaredConfig {
     port: number;
     token?: string;
     use_http2: boolean;
+    custom_domain?: string;
 }
 
 export interface CloudflaredStatus {

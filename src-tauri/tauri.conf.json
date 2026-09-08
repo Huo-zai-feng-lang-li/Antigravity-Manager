@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Antigravity Tools",
-  "version": "4.6.9",
+  "version": "4.6.10",
   "identifier": "com.lbjlaq.antigravity-tools",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -48,7 +48,7 @@
         "https://github.com/Huo-zai-feng-lang-li/Antigravity-Manager/releases/latest/download/updater.json"
       ],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwOTJBNjM0RDE2MDZCOTIKUldTeTRyZkIzUmpVMGlZVms0MUZNby81RGx3RGZVL0N2MVNycW9rTDUK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhCNUUzODUyNEQ1Q0IzNkUKUldSdXMxeE5VamhlaTEyaU1BMlh5bVkzUmpVMGlZVms0MUZNby81RGx3RGZVL0N2MVNycW9rTDUK"
     },
     "process": null,
     "fs": null,

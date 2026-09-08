@@ -46,6 +46,9 @@ pub struct CloudflaredConfig {
     /// 使用http2协议(更兼容)
     #[serde(default)]
     pub use_http2: bool,
+    /// 自定义域名(Auth模式优先展示)
+    #[serde(default)]
+    pub custom_domain: Option<String>,
 }
 
 impl Default for CloudflaredConfig {
@@ -56,6 +59,7 @@ impl Default for CloudflaredConfig {
             port: 8045,
             token: None,
             use_http2: true, // 默认启用http2，更稳定
+            custom_domain: None,
         }
     }
 }
@@ -313,12 +317,28 @@ impl CloudflaredManager {
             spawn_log_reader(stderr, status_clone.clone());
         }
 
+        let initial_url = if config.mode == TunnelMode::Auth {
+            config.custom_domain.as_ref().and_then(|d| {
+                let trimmed = d.trim().trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/');
+                if !trimmed.is_empty() {
+                    Some(format!("https://{}", trimmed))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         *self.process.write().await = Some(child);
         self.update_status(|s| {
             s.installed = installed.clone();
             s.version = version.clone();
             s.running = true;
             s.error = None;
+            if initial_url.is_some() {
+                s.url = initial_url;
+            }
         })
         .await;
 
@@ -455,16 +475,19 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
         return Some(url.to_string());
     }
 
-    // 命名隧道模式：从 "Updated to new configuration" 日志中解析 hostname
-    // 日志格式示例：Updated to new configuration config="{\"ingress\":[{\"hostname\":\"api.example.com\", ...}]}"
-    if line.contains("Updated to new configuration") && line.contains("ingress") {
-        // 查找 hostname 字段
-        if let Some(start) = line.find("\\\"hostname\\\":\\\"") {
-            let after_key = &line[start + 15..]; // 跳过 \"hostname\":\" (共15字符)
-            if let Some(end) = after_key.find("\\\"") {
-                let hostname = &after_key[..end];
-                if !hostname.is_empty() {
-                    return Some(format!("https://{}", hostname));
+    // 命名隧道模式：从配置日志中解析 hostname
+    // 兼容多种引号转义格式：\"hostname\":\"...\" 或 "hostname":"..."
+    if line.contains("ingress") {
+        let patterns = ["\\\"hostname\\\":\\\"", "\"hostname\":\"", "\"hostname\": \""];
+        for pattern in patterns {
+            if let Some(start) = line.find(pattern) {
+                let after_key = &line[start + pattern.len()..];
+                let end_delim = if pattern.starts_with('\\') { "\\\"" } else { "\"" };
+                if let Some(end) = after_key.find(end_delim) {
+                    let hostname = &after_key[..end].trim();
+                    if !hostname.is_empty() && !hostname.contains('*') {
+                        return Some(format!("https://{}", hostname));
+                    }
                 }
             }
         }

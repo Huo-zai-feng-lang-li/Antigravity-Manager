@@ -269,6 +269,33 @@ impl TokenManager {
             *last_used = None;
         }
 
+        // [防御加固] 读取受信任的 accounts.json 索引作为白名单基准，防止磁盘残留孤儿文件复活
+        let valid_account_ids: Option<HashSet<String>> = {
+            let index_path = self.data_dir.join("accounts.json");
+            if index_path.exists() {
+                match std::fs::read_to_string(&index_path) {
+                    Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(json_val) => json_val.get("accounts").and_then(|v| v.as_array()).map(|accounts_arr| {
+                            accounts_arr
+                                .iter()
+                                .filter_map(|a| a.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+                                .collect()
+                        }),
+                        Err(e) => {
+                            tracing::warn!("[Proxy] 无法解析 accounts.json 索引: {}", e);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("[Proxy] 无法读取 accounts.json 索引: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
         let entries =
             std::fs::read_dir(&accounts_dir).map_err(|e| format!("读取账号目录失败: {}", e))?;
 
@@ -283,6 +310,18 @@ impl TokenManager {
 
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
+            }
+
+            // 过滤未在索引中的孤儿账号文件
+            let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some(ref valid_ids) = valid_account_ids {
+                if !valid_ids.contains(file_stem) {
+                    tracing::warn!(
+                        "[Proxy] ⚠️ 发现未在 accounts.json 索引中登记的孤儿账号文件 {:?}，跳过加载",
+                        path
+                    );
+                    continue;
+                }
             }
 
             // 尝试加载账号

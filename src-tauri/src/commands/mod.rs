@@ -981,49 +981,22 @@ pub async fn toggle_proxy_status(
         if enable { "启用" } else { "禁用" }
     ));
 
-    // 1. 读取账号文件
-    let data_dir = modules::account::get_data_dir()?;
-    let account_path = data_dir
-        .join("accounts")
-        .join(format!("{}.json", account_id));
-
-    if !account_path.exists() {
-        return Err(format!("账号文件不存在: {}", account_id));
-    }
-
-    let content =
-        std::fs::read_to_string(&account_path).map_err(|e| format!("读取账号文件失败: {}", e))?;
-
-    let mut account_json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("解析账号文件失败: {}", e))?;
-
-    // 2. 更新 proxy_disabled 字段
-    if enable {
-        // 启用反代
-        account_json["proxy_disabled"] = serde_json::Value::Bool(false);
-        account_json["proxy_disabled_reason"] = serde_json::Value::Null;
-        account_json["proxy_disabled_at"] = serde_json::Value::Null;
-    } else {
-        // 禁用反代
-        let now = chrono::Utc::now().timestamp();
-        account_json["proxy_disabled"] = serde_json::Value::Bool(true);
-        account_json["proxy_disabled_at"] = serde_json::Value::Number(now.into());
-        account_json["proxy_disabled_reason"] =
-            serde_json::Value::String(reason.unwrap_or_else(|| "用户手动禁用".to_string()));
-    }
-
-    // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
+    // 1. 调用底层模块方法：带全局锁、原子更新单账号文件并同步更新 accounts.json 索引摘要
+    let aid = account_id.clone();
+    let r_clone = reason.clone();
+    tokio::task::spawn_blocking(move || {
+        modules::account::toggle_proxy_status(&aid, enable, r_clone.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))??;
 
     modules::logger::log_info(&format!(
-        "账号反代状态已更新: {} ({})",
+        "账号反代状态已更新并同步至索引: {} ({})",
         account_id,
         if enable { "已启用" } else { "已禁用" }
     ));
 
-    // 4. 如果反代服务正在运行,立刻同步到内存池（避免禁用后仍被选中）
+    // 2. 如果反代服务正在运行，立刻同步到内存池（避免禁用后仍被选中）
     {
         let instance_lock = proxy_state.instance.read().await;
         if let Some(instance) = instance_lock.as_ref() {
@@ -1050,7 +1023,7 @@ pub async fn toggle_proxy_status(
         }
     }
 
-    // 5. 更新托盘菜单
+    // 3. 更新托盘菜单
     crate::modules::tray::update_tray_menus(&app);
 
     Ok(())

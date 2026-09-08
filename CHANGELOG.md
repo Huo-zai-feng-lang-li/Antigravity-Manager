@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.6.11 (2026-09-08)**:
+        -   **[核心修复] 彻底解决账号反代禁用状态同步撕裂与引入孤儿账号白名单防御**:
+            -   **原子状态更新与线程锁同步**: 重构 `toggle_proxy_status` 命令，废除脆弱的单文件 JSON 读写，改用底层原子更新接口 `modules::account::toggle_proxy_status`，并引入全局互斥锁 `ACCOUNT_INDEX_LOCK`，确保账号禁用/启用状态在磁盘单文件、全局索引（`accounts.json`）与内存代理池间实时、原子同步。
+            -   **账号加载白名单防御机制**: 在 `TokenManager` 启动加载（`load_accounts`）逻辑中引入基于 `accounts.json` 的白名单校验，强制过滤并剔除未在索引中登记的磁盘孤儿文件，从根本上杜绝已删除账号被反代服务意外复活并调用的逻辑漏洞。
     *   **v4.6.10 (2026-09-08)**:
         -   **[核心特性] Cloudflare 命名隧道 (Named Tunnel) 自动化编排、防缓冲与自定义域名回显**:
             -   **自定义域名回显与持久化**: 在 `CloudflaredConfig` 与前端 `ApiProxy.tsx` 中新增 `custom_domain` 字段支持，命名隧道模式（Auth 模式）启动时直接回显绑定的公网网关地址，修复此前依赖日志正则抓取导致命名隧道 URL 显示空白的缺陷。

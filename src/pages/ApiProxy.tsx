@@ -2181,7 +2181,7 @@ print(response.choices[0].message.content)`;
                                                                     }
                                                                 }}
                                                                 disabled={cfStatus.running}
-                                                                placeholder="例如: gateway.ai95.indevs.in"
+                                                                placeholder="例如: gateway.example.com"
                                                                 className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-base-200 text-sm font-mono disabled:opacity-60"
                                                             />
                                                         </div>

@@ -49,5 +49,17 @@ scripts/_*.json
 scripts/dump_quota_raw.py
 scripts/dump_full.py
 scripts/probe_weekly.py
-scripts/probe_quota_summary.pyDOCKER_DEPLOYMENT.md
+scripts/probe_quota_summary.py
+
+# Local configs and credentials
+gui_config.json
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Agent memory & private deployment plans
+.agents/handoff.md
+.agents/plan-*.md
+
 pnpm-lock.yaml

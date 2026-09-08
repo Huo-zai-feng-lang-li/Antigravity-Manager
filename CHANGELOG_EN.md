@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.6.11 (2026-09-08)**:
+        -   **[Core Fix] Resolve Account Proxy Disabling State Desynchronization & Introduce Orphan Whitelist Defense**:
+            -   **Atomic State Updates & Mutex Synchronization**: Refactored `toggle_proxy_status` command to use the underlying atomic update interface `modules::account::toggle_proxy_status` guarded by the global `ACCOUNT_INDEX_LOCK` mutex, guaranteeing state changes are synchronized atomically across per-account JSON files, `accounts.json` global index, and the memory proxy pool.
+            -   **Whitelist-Based Account Loading Guard**: Added strict `accounts.json` index whitelist validation in `TokenManager::load_accounts`. Discards any unindexed orphan files discovered on disk, permanently preventing deleted or orphaned accounts from being resurrected and queried by the proxy engine.
     *   **v4.6.10 (2026-09-08)**:
         -   **[Core Feature] Cloudflare Named Tunnel Automated Orchestration, Edge Buffer-Bypassing, and Custom Domain UI Display**:
             -   **Custom Domain Persistence & UI Display**: Added `custom_domain` field support in `CloudflaredConfig` and frontend `ApiProxy.tsx`. In Named Tunnel (Auth) mode, the configured public gateway domain is persisted and immediately displayed upon tunnel activation, resolving an issue where the tunnel URL remained blank due to log regex capture misses.

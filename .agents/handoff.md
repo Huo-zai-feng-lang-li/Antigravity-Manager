@@ -5,7 +5,9 @@
 - 从前端导航栏（`Navbar.tsx`）与路由表（`App.tsx`）中彻底剔除了作者塞入的第三方商业推广页面 `ApiKeyFun`（中转站），净化应用定位。
 - 将真正用于安全分发、限额与防滥用管控的 **【用户令牌 (User Tokens)】** 入口优先级提升为 `medium`，避免被挤压隐藏。
 - 在 **【API 反代】** 页面（`ApiProxy.tsx`）的 Cloudflared 隧道卡片中集成了自动拼接 `/v1` 的 **“复制 Base URL”** 功能与高亮防呆指引。
-- 所有前端改动均通过自动化语法与括号平衡性严格验证，确保零 Regression、零 Bug。
+- 完成个人 Fork 仓库的远程源切换（`origin` -> 用户仓库，`upstream` -> 原作者仓库）。
+- 为个人维护版本生成专属的 Tauri 自动更新签名密钥对，并将 `src-tauri/tauri.conf.json` 的 `updater.endpoints` 和 `pubkey` 切至个人仓库，彻底断开对原作者更新源的依赖覆盖。
+- 所有改动已通过本地 Git 暂存并提交，工作区完全干净。
 
 ---
 

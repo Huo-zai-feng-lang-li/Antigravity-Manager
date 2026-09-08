@@ -22,7 +22,8 @@ import {
     Check,
     X,
     Edit2,
-    Save
+    Save,
+    Info
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -359,6 +360,18 @@ export default function ApiProxy() {
             const success = await copyToClipboard(cfStatus.url);
             if (success) {
                 setCopied('cf-url');
+                setTimeout(() => setCopied(null), 2000);
+            }
+        }
+    };
+
+    // Cloudflared: 复制 API Base URL (/v1)
+    const handleCfCopyBaseUrl = async () => {
+        if (cfStatus.url) {
+            const baseUrl = `${cfStatus.url.replace(/\/+$/, '')}/v1`;
+            const success = await copyToClipboard(baseUrl);
+            if (success) {
+                setCopied('cf-base-url');
                 setTimeout(() => setCopied(null), 2000);
             }
         }
@@ -2209,24 +2222,47 @@ print(response.choices[0].message.content)`;
 
                                                 {/* 运行状态和URL */}
                                                 {cfStatus.running && (
-                                                    <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                                                            <span className="text-sm font-bold text-green-800 dark:text-green-200">
-                                                                {t('proxy.cloudflared.running', { defaultValue: 'Tunnel Running' })}
+                                                    <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800 space-y-3">
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                                                <span className="text-sm font-bold text-green-800 dark:text-green-200">
+                                                                    {t('proxy.cloudflared.running', { defaultValue: 'Tunnel Running' })}
+                                                                </span>
+                                                            </div>
+                                                            <span className="text-[11px] px-2 py-0.5 rounded bg-green-200/70 dark:bg-green-800/60 text-green-800 dark:text-green-200 font-medium">
+                                                                {cfMode === 'quick' ? '临时快速隧道' : '固定命名隧道'}
                                                             </span>
                                                         </div>
+
                                                         {cfStatus.url && (
-                                                            <div className="flex items-center gap-2">
-                                                                <code className="flex-1 px-3 py-2 bg-white dark:bg-base-100 rounded text-xs font-mono text-gray-800 dark:text-gray-200 border border-green-200 dark:border-green-800">
-                                                                    {cfStatus.url}
-                                                                </code>
-                                                                <button
-                                                                    onClick={handleCfCopyUrl}
-                                                                    className="p-2 rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors"
-                                                                >
-                                                                    {copied === 'cf-url' ? <CheckCircle size={16} /> : <Copy size={16} />}
-                                                                </button>
+                                                            <div className="space-y-2.5 pt-1">
+                                                                <div>
+                                                                    <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
+                                                                        <span>API Base URL（客户端填此项）</span>
+                                                                        <span className="text-[10px] text-gray-400">OpenAI 兼容接口</span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <code className="flex-1 px-3 py-2 bg-white dark:bg-base-100 rounded text-xs font-mono text-gray-800 dark:text-gray-200 border border-green-200 dark:border-green-800 select-all">
+                                                                            {cfStatus.url.replace(/\/+$/, '')}/v1
+                                                                        </code>
+                                                                        <button
+                                                                            onClick={handleCfCopyBaseUrl}
+                                                                            className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors text-xs font-medium flex items-center gap-1.5 shrink-0"
+                                                                            title="复制 API 接口地址"
+                                                                        >
+                                                                            {copied === 'cf-base-url' ? <CheckCircle size={14} /> : <Copy size={14} />}
+                                                                            <span>复制 Base URL</span>
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="pt-2 border-t border-green-200/60 dark:border-green-800/60 text-[11px] text-green-800/90 dark:text-green-300/90 flex items-start gap-1.5 leading-relaxed">
+                                                                    <Info size={14} className="shrink-0 mt-0.5 text-green-600 dark:text-green-400" />
+                                                                    <span>
+                                                                        此公网地址为 API 专用通道，请配合 API Key 填入 Cursor、Cherry Studio 等客户端使用。直接在浏览器打开将返回 404（属正常现象）。
+                                                                    </span>
+                                                                </div>
                                                             </div>
                                                         )}
                                                     </div>

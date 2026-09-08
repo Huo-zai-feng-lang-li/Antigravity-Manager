@@ -45,10 +45,10 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/lbjlaq/Antigravity-Manager/releases/latest/download/updater.json"
+        "https://github.com/Huo-zai-feng-lang-li/Antigravity-Manager/releases/latest/download/updater.json"
       ],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFRjVDRjdCREE1Rjg2NkYKUldSdmhsL2FlOC8xdnJuTzBtaTRhZkk1VWJ1cW5QWGU3ZWEwU20yZHRlZStxMnRWcUIzc3FwT2IK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwOTJBNjM0RDE2MDZCOTIKUldTeTRyZkIzUmpVMGlZVms0MUZNby81RGx3RGZVL0N2MVNycW9rTDUK"
     },
     "process": null,
     "fs": null,

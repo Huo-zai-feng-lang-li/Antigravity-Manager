@@ -319,7 +319,11 @@ impl CloudflaredManager {
 
         let initial_url = if config.mode == TunnelMode::Auth {
             config.custom_domain.as_ref().and_then(|d| {
-                let trimmed = d.trim().trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/');
+                let trimmed = d
+                    .trim()
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://")
+                    .trim_end_matches('/');
                 if !trimmed.is_empty() {
                     Some(format!("https://{}", trimmed))
                 } else {
@@ -478,13 +482,21 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
     // 命名隧道模式：从配置日志中解析 hostname
     // 兼容多种引号转义格式：\"hostname\":\"...\" 或 "hostname":"..."
     if line.contains("ingress") {
-        let patterns = ["\\\"hostname\\\":\\\"", "\"hostname\":\"", "\"hostname\": \""];
+        let patterns = [
+            "\\\"hostname\\\":\\\"",
+            "\"hostname\":\"",
+            "\"hostname\": \"",
+        ];
         for pattern in patterns {
             if let Some(start) = line.find(pattern) {
                 let after_key = &line[start + pattern.len()..];
-                let end_delim = if pattern.starts_with('\\') { "\\\"" } else { "\"" };
+                let end_delim = if pattern.starts_with('\\') {
+                    "\\\""
+                } else {
+                    "\""
+                };
                 if let Some(end) = after_key.find(end_delim) {
-                    let hostname = &after_key[..end].trim();
+                    let hostname = after_key[..end].trim();
                     if !hostname.is_empty() && !hostname.contains('*') {
                         return Some(format!("https://{}", hostname));
                     }

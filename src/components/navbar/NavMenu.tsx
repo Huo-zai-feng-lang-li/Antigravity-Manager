@@ -54,7 +54,7 @@ export function NavMenu({ navItems }: NavMenuProps) {
                             {item.badge && (
                                 <span
                                     title={item.badgeLabel}
-                                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-colors ${
+                                    className={`text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full transition-colors ${
                                         active
                                             ? 'bg-blue-500 text-white dark:bg-blue-600 dark:text-white'
                                             : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'

@@ -122,22 +122,22 @@ const TokenStats: React.FC = () => {
 
             switch (timeRange) {
                 case 'hourly':
+                    hours = 1;
+                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 1 });
+                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 1 });
+                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 1 });
+                    break;
+                case 'daily':
                     hours = 24;
                     statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 24 });
                     modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 24 });
                     accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 24 });
                     break;
-                case 'daily':
+                case 'weekly':
                     hours = 168;
                     statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_daily', { days: 7 });
                     modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 7 });
                     accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 7 });
-                    break;
-                case 'weekly':
-                    hours = 720;
-                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_weekly', { weeks: 4 });
-                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 30 });
-                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 30 });
                     break;
             }
 
@@ -218,12 +218,6 @@ const TokenStats: React.FC = () => {
             color: COLORS[index % COLORS.length]
         }));
     }, [accountData]);
-
-    const rangeBadgeText = timeRange === 'hourly'
-        ? t('token_stats.range_hint_hourly', '近 24 小时')
-        : timeRange === 'daily'
-            ? t('token_stats.range_hint_daily', '近 7 天')
-            : t('token_stats.range_hint_weekly', '近 30 天');
 
     const trendChartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | undefined>(undefined);
@@ -429,9 +423,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.total_tokens', '总 Token')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700/80 text-gray-500 dark:text-gray-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-gray-800 dark:text-white">
                                 {formatNumber(summary.total_tokens)}
@@ -445,9 +436,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.input_tokens', '输入 Token')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-100/50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                                 {formatNumber(summary.total_input_tokens)}
@@ -461,9 +449,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.output_tokens', '输出 Token')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-purple-100/50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
                                 {formatNumber(summary.total_output_tokens)}
@@ -477,9 +462,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.cached_token', '缓存命中')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-100/50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">
                                 {formatNumber(summary.total_cached_tokens)}
@@ -493,9 +475,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.accounts_used', '活跃账号')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-green-100/50 dark:bg-green-950/40 text-green-600 dark:text-green-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
                                 {summary.unique_accounts}
@@ -509,9 +488,6 @@ const TokenStats: React.FC = () => {
                                     </div>
                                     <span className="font-medium">{t('token_stats.models_used', '使用模型')}</span>
                                 </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-orange-100/50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 font-medium">
-                                    {rangeBadgeText}
-                                </span>
                             </div>
                             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
                                 {modelData.length}
@@ -567,9 +543,8 @@ const TokenStats: React.FC = () => {
                                         dataKey="period"
                                         tick={{ fontSize: 11, fill: '#6b7280' }}
                                         tickFormatter={(val) => {
-                                            if (timeRange === 'hourly') return val.split(' ')[1] || val;
-                                            if (timeRange === 'daily') return val.split('-').slice(1).join('/');
-                                            return val;
+                                            if (timeRange === 'weekly') return val.split('-').slice(1).join('/');
+                                            return val.split(' ')[1] || val;
                                         }}
                                         axisLine={false}
                                         tickLine={false}

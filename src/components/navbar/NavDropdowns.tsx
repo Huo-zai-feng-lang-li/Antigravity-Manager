@@ -155,7 +155,7 @@ export function NavigationDropdown({
                                 <span>{item.label}</span>
                             </div>
                             {item.badge && (
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300">
+                                <span className="text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300">
                                     {item.badge}
                                 </span>
                             )}

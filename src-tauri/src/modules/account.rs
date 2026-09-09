@@ -2237,18 +2237,34 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
                 crate::modules::logger::log_info(&format!("  - Processing {}", masked_email));
                 match fetch_quota_with_retry(&mut account).await {
                     Ok(quota) => {
-                        if let Err(e) = update_account_quota(&account_id, quota) {
-                            crate::modules::logger::log_error(&format!(
-                                "Account {}: Save quota failed - {}",
-                                masked_email, e
-                            ));
-                            Err(format!("Account {}: Save quota failed - {}", email, e))
-                        } else {
-                            crate::modules::logger::log_info(&format!(
-                                "    Success {}",
-                                masked_email
-                            ));
-                            Ok(())
+                        // [FIX] update_account_quota performs synchronous file I/O
+                        // (load_account + save_account + load_app_config) under a
+                        // global std::sync::Mutex. Running it directly on a tokio
+                        // worker thread blocks the async runtime; under 1-min refresh
+                        // intervals with MAX_CONCURRENT=5, all workers can stall
+                        // simultaneously, causing the proxy to become unresponsive.
+                        let account_id_clone = account_id.clone();
+                        let save_result = tokio::task::spawn_blocking(move || {
+                            update_account_quota(&account_id_clone, quota)
+                        })
+                        .await
+                        .map_err(|e| format!("save quota task panicked: {}", e))
+                        .and_then(|r| r);
+                        match save_result {
+                            Ok(()) => {
+                                crate::modules::logger::log_info(&format!(
+                                    "    Success {}",
+                                    masked_email
+                                ));
+                                Ok(())
+                            }
+                            Err(e) => {
+                                crate::modules::logger::log_error(&format!(
+                                    "Account {}: Save quota failed - {}",
+                                    masked_email, e
+                                ));
+                                Err(format!("Account {}: Save quota failed - {}", email, e))
+                            }
                         }
                     }
                     Err(e) => {
@@ -2304,16 +2320,19 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
 /// Check and trigger warmup for models that have recovered to 100%
 /// Called automatically after quota refresh to enable immediate warmup
 pub async fn check_and_trigger_warmup_for_recovered_models() {
-    let accounts = match list_accounts() {
-        Ok(acc) => acc,
-        Err(_) => return,
+    // [FIX] list_accounts / load_app_config are synchronous file reads; run them
+    // on the blocking thread pool to avoid stalling tokio workers.
+    let accounts = match tokio::task::spawn_blocking(list_accounts).await {
+        Ok(Ok(acc)) => acc,
+        _ => return,
     };
 
     // Load config to check if scheduled warmup is enabled
-    let app_config = match crate::modules::config::load_app_config() {
-        Ok(cfg) => cfg,
-        Err(_) => return,
-    };
+    let app_config =
+        match tokio::task::spawn_blocking(crate::modules::config::load_app_config).await {
+            Ok(Ok(cfg)) => cfg,
+            _ => return,
+        };
 
     if !app_config.scheduled_warmup.enabled {
         return;

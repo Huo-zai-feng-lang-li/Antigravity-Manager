@@ -87,8 +87,18 @@ pub fn load_app_config() -> Result<AppConfig, String> {
         }
     }
 
-    let config: AppConfig = serde_json::from_value(v)
+    let mut config: AppConfig = serde_json::from_value(v)
         .map_err(|e| format!("failed_to_convert_config_after_migration: {}", e))?;
+
+    // [FIX] Enforce minimum intervals: batch refresh >= 15min, current account sync >= 5min.
+    // Old config files may contain smaller values (e.g. 1min) that overload the upstream;
+    // clamp here so every reader (UI, BackgroundTaskRunner, MiniView) gets a valid value.
+    if config.refresh_interval < 15 {
+        config.refresh_interval = 15;
+    }
+    if config.sync_interval < 5 {
+        config.sync_interval = 5;
+    }
 
     // If migration occurred, auto-save once to clean up the file
     if modified {

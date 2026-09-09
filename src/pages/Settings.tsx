@@ -154,7 +154,12 @@ function Settings() {
 
     useEffect(() => {
         if (config) {
-            setFormData(config);
+            setFormData({
+                ...config,
+                // [FIX] Enforce minimum intervals: batch refresh >= 15min, current account sync >= 5min
+                refresh_interval: Math.max(config.refresh_interval ?? 15, 15),
+                sync_interval: Math.max(config.sync_interval ?? 5, 5),
+            });
         }
     }, [config]);
 
@@ -753,10 +758,10 @@ function Settings() {
                                         <input
                                             type="number"
                                             className="w-24 px-3 py-2 bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold text-blue-600 dark:text-blue-400"
-                                            min="1"
+                                            min="15"
                                             max="35791"
                                             value={formData.refresh_interval}
-                                            onChange={(e) => setFormData({ ...formData, refresh_interval: isNaN(parseInt(e.target.value)) ? 1 : Math.min(Math.max(parseInt(e.target.value), 1), 35791) })}
+                                            onChange={(e) => setFormData({ ...formData, refresh_interval: isNaN(parseInt(e.target.value)) ? 15 : Math.min(Math.max(parseInt(e.target.value), 15), 35791) })}
                                         />
                                     </div>
                                 </div>
@@ -791,10 +796,10 @@ function Settings() {
                                         <input
                                             type="number"
                                             className="w-24 px-3 py-2 bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-emerald-600 dark:text-emerald-400"
-                                            min="1"
+                                            min="5"
                                             max="35791"
                                             value={formData.sync_interval}
-                                            onChange={(e) => setFormData({ ...formData, sync_interval: isNaN(parseInt(e.target.value)) ? 1 : Math.min(Math.max(parseInt(e.target.value), 1), 35791) })}
+                                            onChange={(e) => setFormData({ ...formData, sync_interval: isNaN(parseInt(e.target.value)) ? 5 : Math.min(Math.max(parseInt(e.target.value), 5), 35791) })}
                                         />
                                     </div>
                                 )}

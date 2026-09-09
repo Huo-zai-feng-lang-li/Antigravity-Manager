@@ -80,8 +80,12 @@ pub fn start_scheduler(
         loop {
             interval.tick().await;
 
-            // Load configuration
-            let Ok(app_config) = config::load_app_config() else {
+            // Load configuration (blocking file I/O -> offload to blocking pool)
+            let Ok(app_config) = tokio::task::spawn_blocking(config::load_app_config)
+                .await
+                .map_err(|e| format!("load config join error: {}", e))
+                .and_then(|r| r.map_err(|e| format!("load config: {}", e)))
+            else {
                 continue;
             };
 
@@ -90,7 +94,11 @@ pub fn start_scheduler(
                 continue;
             }
 
-            let Ok(accounts) = account::list_accounts() else {
+            let Ok(accounts) = tokio::task::spawn_blocking(account::list_accounts)
+                .await
+                .map_err(|e| format!("list accounts join error: {}", e))
+                .and_then(|r| r.map_err(|e| format!("list accounts: {}", e)))
+            else {
                 continue;
             };
 
@@ -272,7 +280,12 @@ pub async fn trigger_warmup_for_account(account: &Account) {
         return;
     }
 
-    let Ok(app_config) = config::load_app_config() else {
+    // [FIX] load_app_config is blocking file I/O; offload to blocking pool.
+    let Ok(app_config) = tokio::task::spawn_blocking(config::load_app_config)
+        .await
+        .map_err(|e| format!("load config join error: {}", e))
+        .and_then(|r| r.map_err(|e| format!("load config: {}", e)))
+    else {
         return;
     };
 

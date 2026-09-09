@@ -493,7 +493,12 @@ impl TokenManager {
 
     /// 加载单个账号
     async fn load_single_account(&self, path: &PathBuf) -> Result<Option<ProxyToken>, String> {
-        let content = std::fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?;
+        // [FIX] std::fs::read_to_string is blocking I/O; offload to the blocking pool.
+        let path_clone = path.clone();
+        let content = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_clone))
+            .await
+            .map_err(|e| format!("读取文件任务失败: {}", e))?
+            .map_err(|e| format!("读取文件失败: {}", e))?;
 
         let mut account: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| format!("解析 JSON 失败: {}", e))?;
@@ -2927,10 +2932,15 @@ impl TokenManager {
     /// }
     /// ```
     pub async fn has_available_account(&self, _quota_group: &str, target_model: &str) -> bool {
-        // 检查配额保护是否启用
-        let quota_protection_enabled = crate::modules::config::load_app_config()
-            .map(|cfg| cfg.quota_protection.enabled)
-            .unwrap_or(false);
+        // [FIX] load_app_config performs synchronous file I/O; this function is on the
+        // per-request path (claude.rs fallback check), so run it on the blocking pool.
+        let quota_protection_enabled = tokio::task::spawn_blocking(|| {
+            crate::modules::config::load_app_config()
+                .map(|cfg| cfg.quota_protection.enabled)
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
 
         // 遍历所有账号,检查是否有可用的
         for entry in self.tokens.iter() {

@@ -5712,8 +5712,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
     let mut close_reason = "normal closure";
 
     'session: loop {
-        let next_message =
-            tokio::time::timeout(WEBSOCKET_IDLE_TIMEOUT, socket.recv()).await;
+        let next_message = tokio::time::timeout(WEBSOCKET_IDLE_TIMEOUT, socket.recv()).await;
 
         let msg_result = match next_message {
             Ok(inner) => inner,
@@ -5987,7 +5986,10 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
     };
     let _ = socket.send(Message::Close(Some(close_frame))).await;
     let _ = socket.close().await;
-    tracing::info!("Codex responses websocket: session ended ({})", close_reason);
+    tracing::info!(
+        "Codex responses websocket: session ended ({})",
+        close_reason
+    );
 }
 
 /// Idle sessions are reclaimed after this duration; active streaming is not

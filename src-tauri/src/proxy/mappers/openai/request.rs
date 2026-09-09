@@ -302,8 +302,8 @@ pub fn transform_openai_request_with_session(
     let user_thinking_budget = request.thinking.as_ref().and_then(|t| t.budget_tokens);
 
     let is_claude_model = mapped_model_lower.contains("claude");
-    let is_claude_thinking = mapped_model_lower.ends_with("-thinking")
-        || (is_claude_model && user_enabled_thinking);
+    let is_claude_thinking =
+        mapped_model_lower.ends_with("-thinking") || (is_claude_model && user_enabled_thinking);
     let is_thinking_model = is_gemini_3_thinking || is_claude_thinking || is_gemini_flash_thinking;
 
     // [NEW] 检查历史消息是否兼容思维模型 (是否有 Assistant 消息缺失 reasoning_content)
@@ -865,7 +865,12 @@ pub fn transform_openai_request_with_session(
             "role": "user",
             "parts": [{ "text": "Continue" }]
         }));
-    } else if contents.first().and_then(|f| f.get("role")).and_then(|r| r.as_str()) == Some("model") {
+    } else if contents
+        .first()
+        .and_then(|f| f.get("role"))
+        .and_then(|r| r.as_str())
+        == Some("model")
+    {
         contents.insert(
             0,
             json!({
@@ -1814,11 +1819,15 @@ mod tests {
                 role: "user".to_string(),
                 refusal: None,
                 content: Some(OpenAIContent::Array(vec![
-                    OpenAIContentBlock::Text { text: "Describe this video".to_string() },
-                    OpenAIContentBlock::VideoUrl { video_url: OpenAIVideoUrl {
-                        url: "data:video/mp4;base64,AAAA".to_string(),
-                        mime_type: None,
-                    } }
+                    OpenAIContentBlock::Text {
+                        text: "Describe this video".to_string(),
+                    },
+                    OpenAIContentBlock::VideoUrl {
+                        video_url: OpenAIVideoUrl {
+                            url: "data:video/mp4;base64,AAAA".to_string(),
+                            mime_type: None,
+                        },
+                    },
                 ])),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1837,10 +1846,7 @@ mod tests {
             parts[1]["inlineData"]["mimeType"].as_str().unwrap(),
             "video/mp4"
         );
-        assert_eq!(
-            parts[1]["inlineData"]["data"].as_str().unwrap(),
-            "AAAA"
-        );
+        assert_eq!(parts[1]["inlineData"]["data"].as_str().unwrap(), "AAAA");
     }
 
     #[test]
@@ -1873,11 +1879,13 @@ mod tests {
         };
 
         // Set passthrough mode so user-specified budget is retained
-        crate::proxy::config::update_thinking_budget_config(crate::proxy::config::ThinkingBudgetConfig {
-            mode: crate::proxy::config::ThinkingBudgetMode::Passthrough,
-            custom_value: 16000,
-            effort: None,
-        });
+        crate::proxy::config::update_thinking_budget_config(
+            crate::proxy::config::ThinkingBudgetConfig {
+                mode: crate::proxy::config::ThinkingBudgetMode::Passthrough,
+                custom_value: 16000,
+                effort: None,
+            },
+        );
 
         // Pass explicit gemini-3-pro-preview which doesn't have "-thinking" suffix
         let (result, _sid, _msg_count, _) =
@@ -1897,7 +1905,9 @@ mod tests {
         assert_eq!(budget, 16000);
 
         // Restore default Auto mode
-        crate::proxy::config::update_thinking_budget_config(crate::proxy::config::ThinkingBudgetConfig::default());
+        crate::proxy::config::update_thinking_budget_config(
+            crate::proxy::config::ThinkingBudgetConfig::default(),
+        );
     }
     #[test]
     fn test_gemini_3_pro_image_not_thinking() {
@@ -2262,7 +2272,8 @@ mod tests {
         });
 
         let request: OpenAIRequest = serde_json::from_value(raw_json).unwrap();
-        let (res_val, _sid, _msg_count, _) = transform_openai_request(&request, "test-v", "gemini-2.5-flash", None);
+        let (res_val, _sid, _msg_count, _) =
+            transform_openai_request(&request, "test-v", "gemini-2.5-flash", None);
         let gen_config = &res_val["request"]["generationConfig"];
         assert_eq!(gen_config["responseMimeType"], "application/json");
         assert!(gen_config.get("responseSchema").is_some());
@@ -2321,8 +2332,13 @@ mod tests {
             .find(|m| m["role"] == "model")
             .expect("Should have model message");
         let parts = assistant_msg["parts"].as_array().unwrap();
-        let has_thought_part = parts.iter().any(|p| p.get("thought") == Some(&serde_json::json!(true)));
-        assert!(!has_thought_part, "Should not inject placeholder thinking block into assistant message for Claude");
+        let has_thought_part = parts
+            .iter()
+            .any(|p| p.get("thought") == Some(&serde_json::json!(true)));
+        assert!(
+            !has_thought_part,
+            "Should not inject placeholder thinking block into assistant message for Claude"
+        );
     }
 
     #[test]
@@ -2361,8 +2377,11 @@ mod tests {
         });
 
         let request: OpenAIRequest = serde_json::from_value(raw_json).unwrap();
-        let (res_val, _sid, _msg_count, _) = transform_openai_request(&request, "test-v", "gemini-3.8-flash-high", None);
-        let contents = res_val["request"]["contents"].as_array().expect("contents must be an array");
+        let (res_val, _sid, _msg_count, _) =
+            transform_openai_request(&request, "test-v", "gemini-3.8-flash-high", None);
+        let contents = res_val["request"]["contents"]
+            .as_array()
+            .expect("contents must be an array");
 
         // First turn MUST be user
         assert_eq!(contents[0]["role"], "user");
@@ -2370,13 +2389,20 @@ mod tests {
 
         // Second turn MUST be model with functionCall
         assert_eq!(contents[1]["role"], "model");
-        let has_func_call = contents[1]["parts"].as_array().unwrap().iter().any(|p| p.get("functionCall").is_some());
+        let has_func_call = contents[1]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.get("functionCall").is_some());
         assert!(has_func_call);
 
         // Third turn MUST be user with functionResponse
         assert_eq!(contents[2]["role"], "user");
-        let has_func_resp = contents[2]["parts"].as_array().unwrap().iter().any(|p| p.get("functionResponse").is_some());
+        let has_func_resp = contents[2]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.get("functionResponse").is_some());
         assert!(has_func_resp);
     }
 }
-

@@ -1168,11 +1168,9 @@ pub async fn get_token_stats_by_model(
 pub async fn get_token_stats_model_trend_hourly(
     hours: i64,
 ) -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
-    tokio::task::spawn_blocking(move || {
-        crate::modules::token_stats::get_model_trend_hourly(hours)
-    })
-    .await
-    .map_err(|e| format!("Task panicked: {}", e))?
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_model_trend_hourly(hours))
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[tauri::command]
@@ -1199,11 +1197,9 @@ pub async fn get_token_stats_account_trend_hourly(
 pub async fn get_token_stats_account_trend_daily(
     days: i64,
 ) -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
-    tokio::task::spawn_blocking(move || {
-        crate::modules::token_stats::get_account_trend_daily(days)
-    })
-    .await
-    .map_err(|e| format!("Task panicked: {}", e))?
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_account_trend_daily(days))
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[tauri::command]

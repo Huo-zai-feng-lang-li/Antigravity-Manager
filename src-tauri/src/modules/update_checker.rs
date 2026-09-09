@@ -184,17 +184,17 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
         Ok(r) if r.status().is_success() => Ok(r),
         _ => {
             let mirror_url = format!("{}{}", GHPROXY_PREFIX, UPDATER_JSON_URL);
-            logger::log_info(&format!("Direct updater.json failed, retrying via mirror: {}", mirror_url));
+            logger::log_info(&format!(
+                "Direct updater.json failed, retrying via mirror: {}",
+                mirror_url
+            ));
             client.get(&mirror_url).send().await
         }
     }
     .map_err(|e| format!("Request failed: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!(
-            "updater.json returned status: {}",
-            resp.status()
-        ));
+        return Err(format!("updater.json returned status: {}", resp.status()));
     }
 
     let updater_info: UpdaterJson = resp
@@ -267,7 +267,8 @@ fn detect_proxy() -> Option<String> {
     let common_ports = [51081, 7890, 7897, 10809, 10808, 20171, 1082];
     for port in common_ports {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(15)).is_ok() {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(15)).is_ok()
+        {
             return Some(format!("http://127.0.0.1:{}", port));
         }
     }
@@ -484,10 +485,7 @@ fn highest_tag_index(tags: &[GitHubTag], current_version: &str) -> Option<usize>
 
 /// Fetch the package.json version pinned at a tag (raw GitHub first, jsDelivr
 /// mirror as fallback). Returns `None` when the version cannot be verified.
-async fn fetch_package_version_at_ref(
-    client: &reqwest::Client,
-    tag_name: &str,
-) -> Option<String> {
+async fn fetch_package_version_at_ref(client: &reqwest::Client, tag_name: &str) -> Option<String> {
     let urls = [
         format!(
             "https://raw.githubusercontent.com/{}/{}/package.json",
@@ -882,7 +880,10 @@ mod tests {
 
         let best = resolve_best_candidate(candidates, "4.6.10").expect("candidates present");
         assert_eq!(best.latest_version, "4.6.9");
-        assert!(!best.has_update, "older candidates must not report an update");
+        assert!(
+            !best.has_update,
+            "older candidates must not report an update"
+        );
     }
 
     #[test]
@@ -906,9 +907,15 @@ mod tests {
         // Simulates a tag pushed without a finalized GitHub Release:
         // the Tags fallback must still surface the new version.
         let tags = vec![
-            GitHubTag { name: "v4.6.9".to_string() },
-            GitHubTag { name: "v4.6.11".to_string() },
-            GitHubTag { name: "v4.6.10".to_string() },
+            GitHubTag {
+                name: "v4.6.9".to_string(),
+            },
+            GitHubTag {
+                name: "v4.6.11".to_string(),
+            },
+            GitHubTag {
+                name: "v4.6.10".to_string(),
+            },
         ];
 
         let index = highest_tag_index(&tags, "4.6.10").expect("newer tag exists");
@@ -918,8 +925,12 @@ mod tests {
     #[test]
     fn test_highest_tag_index_none_when_all_below_current() {
         let tags = vec![
-            GitHubTag { name: "v4.6.8".to_string() },
-            GitHubTag { name: "v4.6.9".to_string() },
+            GitHubTag {
+                name: "v4.6.8".to_string(),
+            },
+            GitHubTag {
+                name: "v4.6.9".to_string(),
+            },
         ];
 
         assert!(highest_tag_index(&tags, "4.6.10").is_none());
@@ -931,9 +942,15 @@ mod tests {
         // pointing at a 4.6.9 commit), the next call must surface the next
         // highest valid tag.
         let tags = vec![
-            GitHubTag { name: "v4.7.0".to_string() },
-            GitHubTag { name: "v4.6.11".to_string() },
-            GitHubTag { name: "v4.6.10".to_string() },
+            GitHubTag {
+                name: "v4.7.0".to_string(),
+            },
+            GitHubTag {
+                name: "v4.6.11".to_string(),
+            },
+            GitHubTag {
+                name: "v4.6.10".to_string(),
+            },
         ];
 
         let first = highest_tag_index(&tags, "4.6.10").expect("candidate exists");

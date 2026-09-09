@@ -1636,7 +1636,10 @@ pub async fn handle_messages(
             if status_code == 429 || status_code == 529 {
                 if let Some(sid) = session_id {
                     token_manager.clear_session_binding(sid);
-                    debug!("[{}] Unbound session {} from account {} due to status {}", trace_id, sid, email, status_code);
+                    debug!(
+                        "[{}] Unbound session {} from account {} due to status {}",
+                        trace_id, sid, email, status_code
+                    );
                 }
             }
         }

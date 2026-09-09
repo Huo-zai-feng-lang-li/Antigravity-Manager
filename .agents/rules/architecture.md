@@ -84,7 +84,7 @@
   - **TLS 仿真**：使用 `rquest` 库固定 `Emulation::Chrome123`，严格对齐浏览器的 Client Hello、密码套件与扩展顺序。
   - **请求头清洗与脱敏**：
     - 注入官方关键特征头：`x-client-name: antigravity`、`x-client-version`、`x-machine-id`、`x-vscode-sessionid`。
-    - 对流式请求（`streamGenerateContent`）使用分块传输（Chunked Stream），对非流式（如图片生成）必须保证 Content-Length 明确计算，防止被 Google 网关误判。
+    - 所有上游 POST（含 `streamGenerateContent`、图片生成）请求体统一先序列化为字节再发送确定 `Content-Length`，禁止 `wrap_stream` 产生 chunked 请求体；`streamGenerateContent` 的流式仅体现在 SSE 响应方向。
   - **三级降级链路**：优先进入 Sandbox/Daily 端点避开主线限流风暴，仅在备用端点全部不可用时降级至 Prod。
 
 ### 2.4 数据持久化与自愈层 (Account Data & DB Module)

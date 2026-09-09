@@ -1,9 +1,11 @@
 //! Security Database Module
 //! 安全监控相关的数据库操作
 
-use rusqlite::{params, Connection};
+use parking_lot::{Mutex, MutexGuard};
+use rusqlite::{params, Connection, Error as SqlError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// IP 访问日志
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,8 +72,10 @@ pub fn get_security_db_path() -> Result<PathBuf, String> {
     Ok(data_dir.join("security.db"))
 }
 
-/// 连接数据库
-fn connect_db() -> Result<Connection, String> {
+static SECURITY_DB: OnceLock<Result<Mutex<Connection>, String>> = OnceLock::new();
+
+/// 打开并配置安全数据库连接。
+fn open_db() -> Result<Connection, String> {
     let db_path = get_security_db_path()?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
@@ -87,6 +91,14 @@ fn connect_db() -> Result<Connection, String> {
         .map_err(|e| e.to_string())?;
 
     Ok(conn)
+}
+
+/// 复用进程内连接，避免每次请求重复打开 SQLite 数据库。
+fn connect_db() -> Result<MutexGuard<'static, Connection>, String> {
+    match SECURITY_DB.get_or_init(|| open_db().map(Mutex::new)) {
+        Ok(connection) => Ok(connection.lock()),
+        Err(error) => Err(error.clone()),
+    }
 }
 
 /// 初始化安全数据库
@@ -209,65 +221,39 @@ pub fn get_ip_access_logs(
     blocked_only: bool,
 ) -> Result<Vec<IpAccessLog>, String> {
     let conn = connect_db()?;
-
-    let sql = if blocked_only {
-        if let Some(ip) = ip_filter {
-            format!(
-                "SELECT id, client_ip, timestamp, method, path, user_agent, status, duration, api_key_hash, blocked, block_reason, username
-                 FROM ip_access_logs
-                 WHERE blocked = 1 AND client_ip LIKE '%{}%'
-                 ORDER BY timestamp DESC
-                 LIMIT {} OFFSET {}",
-                ip, limit, offset
-            )
-        } else {
-            format!(
-                "SELECT id, client_ip, timestamp, method, path, user_agent, status, duration, api_key_hash, blocked, block_reason, username
-                 FROM ip_access_logs
-                 WHERE blocked = 1
-                 ORDER BY timestamp DESC
-                 LIMIT {} OFFSET {}",
-                limit, offset
-            )
-        }
-    } else if let Some(ip) = ip_filter {
-        format!(
+    let ip_pattern = ip_filter.map(|ip| format!("%{ip}%"));
+    let blocked = i64::from(blocked_only);
+    let mut stmt = conn
+        .prepare(
             "SELECT id, client_ip, timestamp, method, path, user_agent, status, duration, api_key_hash, blocked, block_reason, username
              FROM ip_access_logs
-             WHERE client_ip LIKE '%{}%'
+             WHERE (?1 = 0 OR blocked = 1)
+               AND (?2 IS NULL OR client_ip LIKE ?2)
              ORDER BY timestamp DESC
-             LIMIT {} OFFSET {}",
-            ip, limit, offset
+             LIMIT ?3 OFFSET ?4",
         )
-    } else {
-        format!(
-            "SELECT id, client_ip, timestamp, method, path, user_agent, status, duration, api_key_hash, blocked, block_reason, username
-             FROM ip_access_logs
-             ORDER BY timestamp DESC
-             LIMIT {} OFFSET {}",
-            limit, offset
-        )
-    };
-
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     let logs_iter = stmt
-        .query_map([], |row| {
-            Ok(IpAccessLog {
-                id: row.get(0)?,
-                client_ip: row.get(1)?,
-                timestamp: row.get(2)?,
-                method: row.get(3)?,
-                path: row.get(4)?,
-                user_agent: row.get(5)?,
-                status: row.get(6)?,
-                duration: row.get(7)?,
-                api_key_hash: row.get(8)?,
-                blocked: row.get::<_, i32>(9)? != 0,
-                block_reason: row.get(10)?,
-                username: row.get(11).unwrap_or(None),
-            })
-        })
+        .query_map(
+            params![blocked, ip_pattern, limit as i64, offset as i64],
+            |row| {
+                Ok(IpAccessLog {
+                    id: row.get(0)?,
+                    client_ip: row.get(1)?,
+                    timestamp: row.get(2)?,
+                    method: row.get(3)?,
+                    path: row.get(4)?,
+                    user_agent: row.get(5)?,
+                    status: row.get(6)?,
+                    duration: row.get(7)?,
+                    api_key_hash: row.get(8)?,
+                    blocked: row.get::<_, i32>(9)? != 0,
+                    block_reason: row.get(10)?,
+                    username: row.get(11).unwrap_or(None),
+                })
+            },
+        )
         .map_err(|e| e.to_string())?;
 
     let mut logs = Vec::new();
@@ -322,37 +308,40 @@ pub fn get_ip_stats() -> Result<IpStats, String> {
 /// 获取 TOP N IP 访问排行
 pub fn get_top_ips(limit: usize, hours: i64) -> Result<Vec<IpRanking>, String> {
     let conn = connect_db()?;
-
     let since = chrono::Utc::now().timestamp() - (hours * 3600);
+    let mut rankings = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT client_ip, COUNT(*) as cnt, MAX(timestamp) as last_seen
+                 FROM ip_access_logs
+                 WHERE timestamp >= ?1
+                 GROUP BY client_ip
+                 ORDER BY cnt DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT client_ip, COUNT(*) as cnt, MAX(timestamp) as last_seen
-             FROM ip_access_logs
-             WHERE timestamp >= ?1
-             GROUP BY client_ip
-             ORDER BY cnt DESC
-             LIMIT ?2",
-        )
-        .map_err(|e| e.to_string())?;
-
-    let rankings_iter = stmt
-        .query_map([since, limit as i64], |row| {
-            Ok(IpRanking {
-                client_ip: row.get(0)?,
-                request_count: row.get(1)?,
-                last_seen: row.get(2)?,
-                is_blocked: false, // 稍后填充
+        let rankings_iter = stmt
+            .query_map([since, limit as i64], |row| {
+                Ok(IpRanking {
+                    client_ip: row.get(0)?,
+                    request_count: row.get(1)?,
+                    last_seen: row.get(2)?,
+                    is_blocked: false,
+                })
             })
-        })
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
 
-    let mut rankings = Vec::new();
-    for r in rankings_iter {
-        let mut ranking = r.map_err(|e| e.to_string())?;
-        // 检查是否在黑名单中
-        ranking.is_blocked = is_ip_in_blacklist(&ranking.client_ip)?;
-        rankings.push(ranking);
+        let mut rankings = Vec::new();
+        for ranking in rankings_iter {
+            rankings.push(ranking.map_err(|e| e.to_string())?);
+        }
+        rankings
+    };
+
+    for ranking in &mut rankings {
+        ranking.is_blocked =
+            get_blacklist_entry_for_ip_with_connection(&conn, &ranking.client_ip)?.is_some();
     }
 
     Ok(rankings)
@@ -424,7 +413,10 @@ pub fn remove_from_blacklist(id: &str) -> Result<(), String> {
 /// 获取黑名单列表
 pub fn get_blacklist() -> Result<Vec<IpBlacklistEntry>, String> {
     let conn = connect_db()?;
+    get_blacklist_with_connection(&conn)
+}
 
+fn get_blacklist_with_connection(conn: &Connection) -> Result<Vec<IpBlacklistEntry>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, ip_pattern, reason, created_at, expires_at, created_by, hit_count
@@ -462,6 +454,13 @@ pub fn is_ip_in_blacklist(ip: &str) -> Result<bool, String> {
 /// 获取 IP 对应的黑名单条目（如果存在）
 pub fn get_blacklist_entry_for_ip(ip: &str) -> Result<Option<IpBlacklistEntry>, String> {
     let conn = connect_db()?;
+    get_blacklist_entry_for_ip_with_connection(&conn, ip)
+}
+
+fn get_blacklist_entry_for_ip_with_connection(
+    conn: &Connection,
+    ip: &str,
+) -> Result<Option<IpBlacklistEntry>, String> {
     let now = chrono::Utc::now().timestamp();
 
     // 清理过期的黑名单条目
@@ -488,17 +487,20 @@ pub fn get_blacklist_entry_for_ip(ip: &str) -> Result<Option<IpBlacklistEntry>, 
         },
     );
 
-    if let Ok(entry) = entry_result {
-        // 增加命中计数
-        let _ = conn.execute(
-            "UPDATE ip_blacklist SET hit_count = hit_count + 1 WHERE ip_pattern = ?1",
-            [ip],
-        );
-        return Ok(Some(entry));
+    match entry_result {
+        Ok(entry) => {
+            let _ = conn.execute(
+                "UPDATE ip_blacklist SET hit_count = hit_count + 1 WHERE ip_pattern = ?1",
+                [ip],
+            );
+            return Ok(Some(entry));
+        }
+        Err(SqlError::QueryReturnedNoRows) => {}
+        Err(error) => return Err(error.to_string()),
     }
 
     // CIDR 匹配
-    let entries = get_blacklist()?;
+    let entries = get_blacklist_with_connection(conn)?;
     for entry in entries {
         if entry.ip_pattern.contains('/') {
             if cidr_match(ip, &entry.ip_pattern) {
@@ -527,6 +529,9 @@ fn cidr_match(ip: &str, cidr: &str) -> bool {
         Ok(p) => p,
         Err(_) => return false,
     };
+    if prefix_len > 32 {
+        return false;
+    }
 
     let ip_parts: Vec<u8> = ip.split('.').filter_map(|s| s.parse().ok()).collect();
     let net_parts: Vec<u8> = network.split('.').filter_map(|s| s.parse().ok()).collect();
@@ -589,7 +594,10 @@ pub fn remove_from_whitelist(id: &str) -> Result<(), String> {
 /// 获取白名单列表
 pub fn get_whitelist() -> Result<Vec<IpWhitelistEntry>, String> {
     let conn = connect_db()?;
+    get_whitelist_with_connection(&conn)
+}
 
+fn get_whitelist_with_connection(conn: &Connection) -> Result<Vec<IpWhitelistEntry>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, ip_pattern, description, created_at
@@ -634,7 +642,7 @@ pub fn is_ip_in_whitelist(ip: &str) -> Result<bool, String> {
     }
 
     // CIDR 匹配
-    let entries = get_whitelist()?;
+    let entries = get_whitelist_with_connection(&conn)?;
     for entry in entries {
         if entry.ip_pattern.contains('/') {
             if cidr_match(ip, &entry.ip_pattern) {
@@ -660,27 +668,18 @@ pub fn get_ip_access_logs_count(
     blocked_only: bool,
 ) -> Result<u64, String> {
     let conn = connect_db()?;
-
-    let sql = if blocked_only {
-        if let Some(ip) = ip_filter {
-            format!(
-                "SELECT COUNT(*) FROM ip_access_logs WHERE blocked = 1 AND client_ip LIKE '%{}%'",
-                ip
-            )
-        } else {
-            "SELECT COUNT(*) FROM ip_access_logs WHERE blocked = 1".to_string()
-        }
-    } else if let Some(ip) = ip_filter {
-        format!(
-            "SELECT COUNT(*) FROM ip_access_logs WHERE client_ip LIKE '%{}%'",
-            ip
-        )
-    } else {
-        "SELECT COUNT(*) FROM ip_access_logs".to_string()
-    };
+    let ip_pattern = ip_filter.map(|ip| format!("%{ip}%"));
+    let blocked = i64::from(blocked_only);
 
     let count: u64 = conn
-        .query_row(&sql, [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*)
+             FROM ip_access_logs
+             WHERE (?1 = 0 OR blocked = 1)
+               AND (?2 IS NULL OR client_ip LIKE ?2)",
+            params![blocked, ip_pattern],
+            |row| row.get(0),
+        )
         .map_err(|e| e.to_string())?;
 
     Ok(count)

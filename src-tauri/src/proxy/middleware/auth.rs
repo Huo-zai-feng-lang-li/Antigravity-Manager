@@ -40,8 +40,7 @@ async fn auth_middleware_internal(
     let path = request.uri().path().to_string();
 
     // 过滤心跳和健康检查请求,避免日志噪音
-    let is_health_check = path == "/healthz" || path == "/api/health" || path == "/health";
-    let is_internal_endpoint = path.starts_with("/internal/");
+    let is_health_check = is_health_check_path(&path);
     if !path.contains("event_logging") && !is_health_check {
         tracing::info!("Request: {} {}", method, path);
     } else {
@@ -57,25 +56,10 @@ async fn auth_middleware_internal(
     let effective_mode = security.effective_auth_mode();
 
     // 权限检查逻辑
-    if !force_strict {
-        // AI 代理接口 (v1/chat/completions 等)
-        if matches!(effective_mode, ProxyAuthMode::Off) {
-            // [FIX] 即使 auth_mode=Off，也需要尝试识别 User Token 以记录使用情况
-            // 先检查是否携带了 User Token
-            let api_key = request
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
-                .or_else(|| {
-                    request
-                        .headers()
-                        .get("x-api-key")
-                        .and_then(|h| h.to_str().ok())
-                });
-
+    if should_bypass_auth(force_strict, &effective_mode, &path) {
+        if !force_strict && matches!(effective_mode, ProxyAuthMode::Off) {
+            let api_key = extract_api_key(&request);
             if let Some(token) = api_key {
-                // 尝试验证是否为 User Token（不阻止请求，只记录）
                 if let Ok(Some(user_token)) =
                     crate::modules::user_token_db::get_token_by_value(token)
                 {
@@ -84,51 +68,18 @@ async fn auth_middleware_internal(
                         token: user_token.token,
                         username: user_token.username,
                     };
-                    // 注入 identity 到请求
                     let (mut parts, body) = request.into_parts();
                     parts.extensions.insert(identity);
                     let request = Request::from_parts(parts, body);
                     return Ok(next.run(request).await);
                 }
             }
-
-            return Ok(next.run(request).await);
         }
-
-        if matches!(effective_mode, ProxyAuthMode::AllExceptHealth) && is_health_check {
-            return Ok(next.run(request).await);
-        }
-
-        // 内部端点 (/internal/*) 豁免鉴权 - 用于 warmup 等内部功能
-        if is_internal_endpoint {
-            tracing::debug!("Internal endpoint bypassed auth: {}", path);
-            return Ok(next.run(request).await);
-        }
-    } else {
-        // Management endpoints always require admin auth; only health checks stay public.
-        if is_health_check {
-            return Ok(next.run(request).await);
-        }
+        return Ok(next.run(request).await);
     }
 
     // 从 header 中提取 API key
-    let api_key = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-api-key")
-                .and_then(|h| h.to_str().ok())
-        })
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-goog-api-key")
-                .and_then(|h| h.to_str().ok())
-        });
+    let api_key = extract_api_key(&request);
 
     if security.api_key.is_empty()
         && (security.admin_password.is_none()
@@ -237,6 +188,39 @@ async fn auth_middleware_internal(
     }
 }
 
+fn is_health_check_path(path: &str) -> bool {
+    matches!(path, "/healthz" | "/api/health" | "/health")
+}
+
+fn should_bypass_auth(force_strict: bool, effective_mode: &ProxyAuthMode, path: &str) -> bool {
+    if force_strict {
+        return is_health_check_path(path);
+    }
+
+    matches!(effective_mode, ProxyAuthMode::Off)
+        || (matches!(effective_mode, ProxyAuthMode::AllExceptHealth) && is_health_check_path(path))
+}
+
+fn extract_api_key(request: &Request) -> Option<&str> {
+    request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-api-key")
+                .and_then(|h| h.to_str().ok())
+        })
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-goog-api-key")
+                .and_then(|h| h.to_str().ok())
+        })
+}
+
 /// 用户令牌身份信息 (传递给 Monitor 使用)
 #[derive(Clone, Debug)]
 pub struct UserTokenIdentity {
@@ -258,6 +242,7 @@ mod tests {
             api_key: "sk-api".to_string(),
             admin_password: Some("admin123".to_string()),
             allow_lan_access: true,
+            public_tunnel_active: false,
             port: 8045,
             security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
         }));
@@ -276,5 +261,14 @@ mod tests {
     #[test]
     fn test_auth_placeholder() {
         assert!(true);
+    }
+
+    #[test]
+    fn test_internal_endpoint_does_not_bypass_enabled_auth() {
+        assert!(!should_bypass_auth(
+            false,
+            &ProxyAuthMode::AllExceptHealth,
+            "/internal/warmup"
+        ));
     }
 }

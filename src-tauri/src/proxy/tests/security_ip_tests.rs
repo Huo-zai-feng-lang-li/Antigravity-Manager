@@ -12,9 +12,9 @@
 mod security_db_tests {
     use crate::modules::security_db::{
         add_to_blacklist, add_to_whitelist, cleanup_old_ip_logs, clear_ip_access_logs,
-        get_blacklist, get_blacklist_entry_for_ip, get_ip_access_logs, get_ip_stats, get_whitelist,
-        init_db, is_ip_in_blacklist, is_ip_in_whitelist, remove_from_blacklist,
-        remove_from_whitelist, save_ip_access_log, IpAccessLog,
+        get_blacklist, get_blacklist_entry_for_ip, get_ip_access_logs, get_ip_access_logs_count,
+        get_ip_stats, get_whitelist, init_db, is_ip_in_blacklist, is_ip_in_whitelist,
+        remove_from_blacklist, remove_from_whitelist, save_ip_access_log, IpAccessLog,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -448,6 +448,38 @@ mod security_db_tests {
         assert_eq!(blocked_only.len(), 1);
         assert_eq!(blocked_only[0].client_ip, "blocked.access.ip");
         assert!(blocked_only[0].blocked);
+
+        cleanup_test_data();
+    }
+
+    #[test]
+    fn test_access_log_filter_treats_sql_syntax_as_plain_text() {
+        let _ = init_db();
+        cleanup_test_data();
+
+        for client_ip in ["filter.safe.ip", "filter.other.ip"] {
+            let log = IpAccessLog {
+                id: uuid::Uuid::new_v4().to_string(),
+                client_ip: client_ip.to_string(),
+                timestamp: now_timestamp(),
+                method: Some("GET".to_string()),
+                path: Some("/healthz".to_string()),
+                user_agent: None,
+                status: Some(200),
+                duration: Some(10),
+                api_key_hash: None,
+                blocked: false,
+                block_reason: None,
+                username: None,
+            };
+            save_ip_access_log(&log).unwrap();
+        }
+
+        let injection = "' OR 1=1 --";
+        assert!(get_ip_access_logs(10, 0, Some(injection), false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(get_ip_access_logs_count(Some(injection), false).unwrap(), 0);
 
         cleanup_test_data();
     }

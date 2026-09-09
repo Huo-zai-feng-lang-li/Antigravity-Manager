@@ -53,12 +53,26 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
     let re_bearer = regex::Regex::new(r#"(?i)(bearer\s+)[^"'\\\s,}\]]+"#).unwrap();
     let redacted = re_bearer.replace_all(&redacted, "$1<redacted>");
 
-    // 限制长度防止日志炸弹
-    if redacted.len() > 1000 {
-        format!("{}... (truncated)", &redacted[..1000])
-    } else {
-        redacted.into_owned()
+    truncate_log_line(&redacted, 1000)
+}
+
+fn truncate_log_line(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
     }
+
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!("{}... (truncated)", &text[..end])
+}
+
+fn header_names_for_log(headers: &header::HeaderMap) -> Vec<String> {
+    let mut names: Vec<String> = headers.keys().map(|name| name.to_string()).collect();
+    names.sort();
+    names
 }
 
 // Cloud Code v1internal endpoints (fallback order: Sandbox → Daily → Prod)
@@ -177,7 +191,7 @@ impl UpstreamClient {
                 let url = crate::proxy::config::normalize_proxy_url(&config.url);
                 if let Ok(proxy) = rquest::Proxy::all(&url) {
                     builder = builder.proxy(proxy);
-                    tracing::info!("UpstreamClient enabled proxy: {}", url);
+                    tracing::info!("UpstreamClient enabled configured upstream proxy");
                 }
             }
         }
@@ -361,8 +375,20 @@ impl UpstreamClient {
         }
 
         // 2. Device & Session Identity
-        // Machine ID (Persistent)
-        if let Ok(mid) = machine_uid::get() {
+        // Machine ID (优先使用账号独立绑定的 DeviceProfile，实现多账号指纹隔离，防止关联风控)
+        let resolved_machine_id: Option<String> = account_id
+            .and_then(|id| crate::modules::account::load_account(id).ok())
+            .and_then(|acc| acc.device_profile)
+            .map(|dp| {
+                if !dp.mac_machine_id.is_empty() {
+                    dp.mac_machine_id
+                } else {
+                    dp.machine_id
+                }
+            })
+            .or_else(|| machine_uid::get().ok());
+
+        if let Some(mid) = resolved_machine_id {
             if let Ok(mid_val) = header::HeaderValue::from_str(&mid) {
                 headers.insert("x-machine-id", mid_val);
             }
@@ -400,8 +426,9 @@ impl UpstreamClient {
             headers.remove("x-goog-user-project");
         }
 
-        // [DEBUG] Log headers for verification
-        tracing::debug!(?headers, "Final Upstream Request Headers");
+        // Log only header names; Authorization and device identifiers are sensitive.
+        let header_names = header_names_for_log(&headers);
+        tracing::debug!(?header_names, "Final Upstream Request Header Names");
 
         let mut has_triggered_downgrade = false;
 
@@ -419,19 +446,12 @@ impl UpstreamClient {
 
                 let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
-                let mut req_builder = client.post(&url).headers(headers.clone());
-
-                // [FIX] 仅对流式接口 (streamGenerateContent) 使用分块传输仿真
-                // 对其他接口 (如 generateContent, loadCodeAssist) 发送正常的固定长度 Body
-                // 否则图像生成会因为缺少 Content-Length 而被 Google 服务端拒绝或限流 (429)
-                if method == "streamGenerateContent" {
-                    let stream_bytes = body_bytes.clone();
-                    req_builder = req_builder.body(rquest::Body::wrap_stream(
-                        futures::stream::once(async move { Ok::<_, std::io::Error>(stream_bytes) }),
-                    ));
-                } else {
-                    req_builder = req_builder.body(body_bytes.clone());
-                }
+                // 发送带确定 Content-Length 的标准 JSON 载荷
+                // 严禁对 POST 上游接口使用 wrap_stream，否则抹除 Content-Length 极易触发上游 429 或协议校验拒绝
+                let req_builder = client
+                    .post(&url)
+                    .headers(headers.clone())
+                    .body(body_bytes.clone());
 
                 let response = req_builder.send().await;
 
@@ -597,5 +617,28 @@ mod tests {
             url2,
             "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
         );
+    }
+
+    #[test]
+    fn test_sanitize_error_for_log_handles_multibyte_truncation() {
+        let error = "错误".repeat(600);
+        let sanitized = sanitize_error_for_log(&error);
+
+        assert!(sanitized.ends_with("... (truncated)"));
+        assert!(sanitized.is_char_boundary(sanitized.len() - "... (truncated)".len()));
+    }
+
+    #[test]
+    fn test_header_debug_data_contains_names_only() {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_static("Bearer secret-token"),
+        );
+
+        let names = header_names_for_log(&headers);
+
+        assert_eq!(names, vec!["authorization"]);
+        assert!(!names.iter().any(|name| name.contains("secret-token")));
     }
 }

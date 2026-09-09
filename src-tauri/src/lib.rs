@@ -747,6 +747,24 @@ pub fn run() {
                 // Handle app exit - cleanup background tasks
                 tauri::RunEvent::Exit => {
                     tracing::info!("Application exiting, cleaning up background tasks...");
+                    if let Some(cf_state) =
+                        app_handle.try_state::<crate::commands::cloudflared::CloudflaredState>()
+                    {
+                        tauri::async_runtime::block_on(async {
+                            let manager_lock = cf_state.manager.read().await;
+                            if let Some(manager) = manager_lock.as_ref() {
+                                if tokio::time::timeout(
+                                    std::time::Duration::from_secs(3),
+                                    manager.stop(),
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    tracing::warn!("Cloudflared shutdown timed out");
+                                }
+                            }
+                        });
+                    }
                     if let Some(state) =
                         app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
                     {

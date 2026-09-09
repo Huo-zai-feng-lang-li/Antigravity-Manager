@@ -35,12 +35,12 @@
   - **单次自动降级重试**：立即移除该 Header，重置重试标记，重新发起一次端点降级探测。
   - 针对 `generateContent` 与 `streamGenerateContent`，默认主动剥离 `x-goog-user-project`。
 
-### 2.2 流式传输分块 (Chunked) 与图像生成 Content-Length 冲突
-- **现象**：请求图像生成接口（Imagen / Gemini Image）时，频繁被 Google 服务端拒绝或报 429 / 400 Bad Request。
-- **根因**：如果对所有请求无差别使用 `rquest::Body::wrap_stream`，会导致 HTTP 请求以 `Transfer-Encoding: chunked` 形式发送，缺少明确的 `Content-Length`。Google 图像生成后端强制校验固定包长。
-- **防御对策**：
-  - 仅对流式对话方法 `streamGenerateContent` 启用 stream 分块包装。
-  - 对 `generateContent`、`loadCodeAssist`、图像生成等所有非流式方法，必须发送明确字节长度的 Body（`req_builder.body(body_bytes)`）。
+### 2.2 上游请求体必须带确定 Content-Length（禁止 Chunked 请求体）
+- **现象**：对上游 POST 接口（图像生成 Imagen / Gemini Image，以及对话接口）使用流式请求体时，被 Google 服务端拒绝或报 429 / 400 Bad Request。
+- **根因**：若使用 `rquest::Body::wrap_stream`，HTTP 请求会以 `Transfer-Encoding: chunked` 发送，缺少明确 `Content-Length`；官方客户端对 JSON POST 一律使用固定包长，chunked 请求体属于异常指纹，Google 后端会做协议校验。
+- **防御对策（以 `proxy/upstream/client.rs` 实际实现为准）**：
+  - **所有**上游 POST 方法（含 `streamGenerateContent`、`generateContent`、`loadCodeAssist`、图像生成）都先 `serde_json::to_vec(&body)` 再 `req_builder.body(body_bytes)`，由客户端计算并发送确定 `Content-Length`。
+  - 严禁对上游 POST 请求体使用 `wrap_stream`。注意区分：这里固定的是**请求方向**的传输编码；`streamGenerateContent` 的**响应方向**仍是 SSE 流式读取，二者互不冲突。
 
 ### 2.3 上游端点 Fallback 优先级与限流风暴
 - **现象**：直接调用 Google Prod 端点（`cloudcode-pa.googleapis.com`）极易触发全局 429 限流。

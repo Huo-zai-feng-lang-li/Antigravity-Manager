@@ -47,6 +47,25 @@ impl ProxyServiceState {
             starting: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    pub async fn set_public_tunnel_active(&self, active: bool) {
+        let server = {
+            let admin_lock = self.admin_server.read().await;
+            if let Some(admin) = admin_lock.as_ref() {
+                Some(admin.axum_server.clone())
+            } else {
+                drop(admin_lock);
+                let instance_lock = self.instance.read().await;
+                instance_lock
+                    .as_ref()
+                    .map(|instance| instance.axum_server.clone())
+            }
+        };
+
+        if let Some(server) = server {
+            server.set_public_tunnel_active(active).await;
+        }
+    }
 }
 
 /// 启动反代服务 (Tauri 命令)

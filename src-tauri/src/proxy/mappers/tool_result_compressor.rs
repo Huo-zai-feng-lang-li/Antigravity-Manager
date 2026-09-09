@@ -11,6 +11,9 @@ use tracing::{debug, info};
 
 /// 最大工具结果字符数 (约 20 万,防止 prompt 超长)
 const MAX_TOOL_RESULT_CHARS: usize = 200_000;
+const NON_TEXT_BLOCK_RESERVE: usize = 100;
+const TEXT_BLOCK_RESERVE: usize = 512;
+const TRUNCATION_OVERHEAD_RESERVE: usize = 80;
 
 /// 浏览器快照检测阈值
 const SNAPSHOT_DETECTION_THRESHOLD: usize = 20_000;
@@ -276,14 +279,22 @@ fn deep_clean_html(html: &str) -> String {
 /// 清理工具结果 content blocks
 ///
 /// 处理逻辑:
-/// 1. 移除 base64 图片 (避免体积过大)
+/// 1. 保留非文本块的结构
 /// 2. 压缩文本内容 (使用智能压缩策略)
-/// 3. 限制总字符数 (默认 200,000)
+/// 3. 为后续内容预留最小预算，避免丢失图片或尾部文本
+/// 4. 限制总字符数 (默认 200,000)
 ///
 /// 清理并截断工具调用结果内容块
 pub fn sanitize_tool_result_blocks(blocks: &mut Vec<Value>) {
-    let mut used_chars = 0;
+    let mut used_chars: usize = 0;
     let mut cleaned_blocks = Vec::new();
+    let mut reserved_after = vec![0usize; blocks.len()];
+    let mut reserved: usize = 0;
+
+    for index in (0..blocks.len()).rev() {
+        reserved_after[index] = reserved;
+        reserved = reserved.saturating_add(block_reserve(&blocks[index]));
+    }
 
     if !blocks.is_empty() {
         info!(
@@ -293,16 +304,18 @@ pub fn sanitize_tool_result_blocks(blocks: &mut Vec<Value>) {
         );
     }
 
-    for block in blocks.iter() {
+    for (index, block) in blocks.iter().enumerate() {
         // 压缩文本内容
         if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-            let remaining = MAX_TOOL_RESULT_CHARS.saturating_sub(used_chars);
-            if remaining == 0 {
-                debug!("[ToolCompressor] Reached character limit, stopping");
-                break;
-            }
+            let remaining = MAX_TOOL_RESULT_CHARS
+                .saturating_sub(used_chars)
+                .saturating_sub(reserved_after[index]);
 
-            let compacted = compact_tool_result_text(text, remaining);
+            let compacted = if remaining == 0 {
+                String::new()
+            } else {
+                compact_tool_result_text(text, remaining)
+            };
             let mut new_block = block.clone();
             new_block["text"] = Value::String(compacted.clone());
             cleaned_blocks.push(new_block);
@@ -316,11 +329,7 @@ pub fn sanitize_tool_result_blocks(blocks: &mut Vec<Value>) {
         } else {
             // 保留其他类型的块 (例如图片), 但受总长度块数限制, 此处不单独截断
             cleaned_blocks.push(block.clone());
-            used_chars += 100; // 估算非文本块大小
-        }
-
-        if used_chars >= MAX_TOOL_RESULT_CHARS {
-            break;
+            used_chars += NON_TEXT_BLOCK_RESERVE;
         }
     }
 
@@ -332,6 +341,18 @@ pub fn sanitize_tool_result_blocks(blocks: &mut Vec<Value>) {
     );
 
     *blocks = cleaned_blocks;
+}
+
+fn block_reserve(block: &Value) -> usize {
+    block
+        .get("text")
+        .and_then(|value| value.as_str())
+        .map(|text| {
+            text.len()
+                .min(TEXT_BLOCK_RESERVE)
+                .saturating_add(TRUNCATION_OVERHEAD_RESERVE)
+        })
+        .unwrap_or(NON_TEXT_BLOCK_RESERVE)
 }
 
 #[cfg(test)]
@@ -405,5 +426,7 @@ Please read the file locally."#;
         // 确认工具结果不再剔除图片
         sanitize_tool_result_blocks(&mut blocks);
         assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[2]["type"], "image");
+        assert_eq!(blocks[3]["text"], "some text");
     }
 }

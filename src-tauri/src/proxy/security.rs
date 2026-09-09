@@ -6,6 +6,7 @@ pub struct ProxySecurityConfig {
     pub api_key: String,
     pub admin_password: Option<String>,
     pub allow_lan_access: bool,
+    pub public_tunnel_active: bool,
     pub port: u16,
     pub security_monitor: SecurityMonitorConfig,
 }
@@ -17,12 +18,20 @@ impl ProxySecurityConfig {
             api_key: config.api_key.clone(),
             admin_password: config.admin_password.clone(),
             allow_lan_access: config.allow_lan_access,
+            public_tunnel_active: false,
             port: config.port,
             security_monitor: config.security_monitor.clone(),
         }
     }
 
     pub fn effective_auth_mode(&self) -> ProxyAuthMode {
+        if self.public_tunnel_active {
+            return match self.auth_mode {
+                ProxyAuthMode::Strict => ProxyAuthMode::Strict,
+                _ => ProxyAuthMode::AllExceptHealth,
+            };
+        }
+
         match self.auth_mode {
             ProxyAuthMode::Auto => {
                 if self.allow_lan_access {
@@ -47,6 +56,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             admin_password: None,
             allow_lan_access: false,
+            public_tunnel_active: false,
             port: 8080,
             security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
         };
@@ -60,9 +70,28 @@ mod tests {
             api_key: "sk-test".to_string(),
             admin_password: None,
             allow_lan_access: true,
+            public_tunnel_active: false,
             port: 8080,
             security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
         };
+        assert!(matches!(
+            s.effective_auth_mode(),
+            ProxyAuthMode::AllExceptHealth
+        ));
+    }
+
+    #[test]
+    fn public_tunnel_forces_authentication() {
+        let s = ProxySecurityConfig {
+            auth_mode: ProxyAuthMode::Auto,
+            api_key: "sk-test".to_string(),
+            admin_password: None,
+            allow_lan_access: false,
+            public_tunnel_active: true,
+            port: 8080,
+            security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
+        };
+
         assert!(matches!(
             s.effective_auth_mode(),
             ProxyAuthMode::AllExceptHealth

@@ -467,8 +467,16 @@ impl AxumServer {
 
     pub async fn update_security(&self, config: &crate::proxy::config::ProxyConfig) {
         let mut sec = self.security_state.write().await;
+        let public_tunnel_active = sec.public_tunnel_active;
         *sec = crate::proxy::ProxySecurityConfig::from_proxy_config(config);
+        sec.public_tunnel_active = public_tunnel_active;
         tracing::info!("反代服务安全配置已热更新");
+    }
+
+    pub async fn set_public_tunnel_active(&self, active: bool) {
+        let mut security = self.security_state.write().await;
+        security.public_tunnel_active = active;
+        tracing::info!("Cloudflared public tunnel authentication: {}", active);
     }
 
     pub async fn update_zai(&self, config: &crate::proxy::config::ProxyConfig) {
@@ -1629,7 +1637,9 @@ async fn admin_save_config(
     // 更新安全策略
     {
         let mut security = state.security.write().await;
+        let public_tunnel_active = security.public_tunnel_active;
         *security = crate::proxy::ProxySecurityConfig::from_proxy_config(&new_config.proxy);
+        security.public_tunnel_active = public_tunnel_active;
     }
 
     // 更新 z.ai 配置
@@ -2785,6 +2795,7 @@ async fn admin_cloudflared_start(
                 Json(ErrorResponse { error: e }),
             )
         })?;
+        state.security.write().await.public_tunnel_active = true;
         Ok(Json(status))
     } else {
         Err((
@@ -2818,6 +2829,7 @@ async fn admin_cloudflared_stop(
                 Json(ErrorResponse { error: e }),
             )
         })?;
+        state.security.write().await.public_tunnel_active = false;
         Ok(Json(status))
     } else {
         Err((
@@ -4161,7 +4173,8 @@ mod image_scheduler_tests {
     #[test]
     fn test_switch_request_deserialization_with_and_without_target_ide() {
         use super::SwitchRequest;
-        let with_ide: SwitchRequest = serde_json::from_str(r#"{"accountId": "acc_1", "targetIde": "agy"}"#).unwrap();
+        let with_ide: SwitchRequest =
+            serde_json::from_str(r#"{"accountId": "acc_1", "targetIde": "agy"}"#).unwrap();
         assert_eq!(with_ide.account_id, "acc_1");
         assert_eq!(with_ide.target_ide.as_deref(), Some("agy"));
 

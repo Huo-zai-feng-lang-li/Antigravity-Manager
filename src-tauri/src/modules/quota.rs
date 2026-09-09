@@ -597,9 +597,8 @@ pub async fn warmup_model_directly(
     _account_id: Option<&str>,
 ) -> bool {
     // Get currently configured proxy port
-    let port = config::load_app_config()
-        .map(|c| c.proxy.port)
-        .unwrap_or(8045);
+    let app_config = config::load_app_config().ok();
+    let port = app_config.as_ref().map(|c| c.proxy.port).unwrap_or(8045);
 
     let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
     let body = json!({
@@ -616,12 +615,17 @@ pub async fn warmup_model_directly(
         .no_proxy()
         .build()
         .unwrap_or_else(|_| rquest::Client::new());
-    let resp = client
+    let mut request = client
         .post(&warmup_url)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await;
+        .header("Content-Type", "application/json");
+    if let Some(api_key) = app_config
+        .as_ref()
+        .map(|c| c.proxy.api_key.trim())
+        .filter(|key| !key.is_empty())
+    {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let resp = request.json(&body).send().await;
 
     match resp {
         Ok(response) => {

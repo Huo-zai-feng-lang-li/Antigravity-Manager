@@ -54,6 +54,16 @@ fn classify_rate_limit_reason(error_body: &str) -> crate::proxy::rate_limit::Rat
 
 const IMAGE_ACCOUNT_RESELECT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Error returned when no schedulable account exists in the in-memory pool.
+/// Centralized so callers can match it reliably (e.g. pool-rebuild backoff).
+pub(crate) const ERROR_TOKEN_POOL_EMPTY: &str = "Token pool is empty";
+
+/// Number of attempts when the pool is transiently empty during a rebuild
+/// (load_accounts clears then re-inserts accounts). Total extra wait is
+/// (`POOL_EMPTY_RETRY_ATTEMPTS` - 1) * `POOL_EMPTY_BACKOFF` = 100ms.
+const POOL_EMPTY_RETRY_ATTEMPTS: u32 = 3;
+const POOL_EMPTY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
+
 async fn wait_for_image_account_change(
     changes: &mut tokio::sync::watch::Receiver<u64>,
     remaining: std::time::Duration,
@@ -1524,23 +1534,51 @@ impl TokenManager {
         }
 
         // 【优化 Issue #284】添加 5 秒超时，防止死锁
+        //
+        // Pool-rebuild backoff: load_accounts() clears `tokens` before
+        // re-inserting every account, so a request arriving in that short
+        // window sees an empty pool and would otherwise fail with a spurious
+        // 503. Retry only the exact "pool empty" error a bounded number of
+        // times; every other error (no quota, rate limit, timeout) propagates
+        // immediately so real problems are never masked.
         let timeout_duration = std::time::Duration::from_secs(5);
-        match tokio::time::timeout(
-            timeout_duration,
-            self.get_token_internal(
-                quota_group,
-                force_rotate,
-                session_id,
-                target_model,
-                excluded_accounts,
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(
-                "Token acquisition timeout (5s) - system too busy or deadlock detected".to_string(),
-            ),
+        let mut pool_empty_attempts: u32 = 0;
+
+        loop {
+            let outcome = tokio::time::timeout(
+                timeout_duration,
+                self.get_token_internal(
+                    quota_group,
+                    force_rotate,
+                    session_id,
+                    target_model,
+                    excluded_accounts,
+                ),
+            )
+            .await;
+
+            match outcome {
+                Ok(Err(error))
+                    if error == ERROR_TOKEN_POOL_EMPTY
+                        && pool_empty_attempts + 1 < POOL_EMPTY_RETRY_ATTEMPTS =>
+                {
+                    pool_empty_attempts += 1;
+                    tracing::debug!(
+                        "[Proxy] Token pool transiently empty during rebuild, backoff retry {}/{}",
+                        pool_empty_attempts,
+                        POOL_EMPTY_RETRY_ATTEMPTS - 1
+                    );
+                    tokio::time::sleep(POOL_EMPTY_BACKOFF).await;
+                    continue;
+                }
+                Ok(result) => return result,
+                Err(_) => {
+                    return Err(
+                        "Token acquisition timeout (5s) - system too busy or deadlock detected"
+                            .to_string(),
+                    )
+                }
+            }
         }
     }
 
@@ -1558,7 +1596,7 @@ impl TokenManager {
         tokens_snapshot.retain(|token| !excluded_accounts.contains(&token.account_id));
         let mut total = tokens_snapshot.len();
         if total == 0 {
-            return Err("Token pool is empty".to_string());
+            return Err(ERROR_TOKEN_POOL_EMPTY.to_string());
         }
 
         // [NEW] 1. 动态能力过滤 (Capability Filter)
@@ -1591,7 +1629,7 @@ impl TokenManager {
                     normalized_target
                 ));
             }
-            return Err("Token pool is empty".to_string());
+            return Err(ERROR_TOKEN_POOL_EMPTY.to_string());
         }
 
         tokens_snapshot.sort_by(|a, b| {
@@ -1708,7 +1746,7 @@ impl TokenManager {
                         }
 
                         if total == 0 {
-                            return Err("Token pool is empty".to_string());
+                            return Err(ERROR_TOKEN_POOL_EMPTY.to_string());
                         }
                     }
                     OnDiskAccountState::Unknown => {
@@ -1720,7 +1758,7 @@ impl TokenManager {
                         tokens_snapshot.retain(|t| t.account_id != preferred_token.account_id);
                         total = tokens_snapshot.len();
                         if total == 0 {
-                            return Err("Token pool is empty".to_string());
+                            return Err(ERROR_TOKEN_POOL_EMPTY.to_string());
                         }
                     }
                     OnDiskAccountState::Enabled => {
@@ -5195,6 +5233,109 @@ mod tests {
                 "ultra_low@test.com"
             ],
             "Sonnet should sort by quota first, then by tier as tiebreaker"
+        );
+    }
+
+    /// Regression for the spurious 503 "Token pool is empty" observed while
+    /// load_accounts() clears and rebuilds the pool: a request arriving in
+    /// that window must retry with bounded backoff and succeed once an
+    /// account is re-inserted.
+    #[tokio::test]
+    async fn empty_pool_retries_then_succeeds_after_rebuild() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-pool-retry-ok-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(tmp_root.join("accounts")).unwrap();
+        let manager = Arc::new(TokenManager::new(tmp_root.clone()));
+        assert_eq!(manager.tokens.len(), 0);
+
+        let target_model = "gemini-2.5-flash";
+        let quota_key =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
+
+        // Simulate load_accounts() finishing 70ms later (after the first
+        // attempt finds the pool empty and backs off for 50ms).
+        let account_file = tmp_root
+            .join("accounts")
+            .join("rebuild@test.com.json");
+        // The selection safety-net reads on-disk state; an enabled file lets
+        // the rebuilt token pass (a missing/fake path is treated as disabled).
+        std::fs::write(
+            &account_file,
+            serde_json::json!({ "id": "rebuild@test.com", "disabled": false }).to_string(),
+        )
+        .unwrap();
+        let inserter = {
+            let manager = Arc::clone(&manager);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+                let mut token =
+                    create_test_token("rebuild@test.com", Some("PRO"), 1.0, None, Some(50));
+                token.account_path = account_file;
+                token.model_quotas.insert(quota_key, 50);
+                manager.tokens.insert(token.account_id.clone(), token);
+            })
+        };
+
+        let started = std::time::Instant::now();
+        let result = manager
+            .get_token_filtered(
+                "default",
+                false,
+                None,
+                target_model,
+                &HashSet::new(),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        inserter.await.unwrap();
+
+        let (_access, _project, email, account_id, _wait_ms) =
+            result.expect("pool must recover through backoff retry");
+        assert_eq!(email, "rebuild@test.com");
+        assert_eq!(account_id, "rebuild@test.com");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(50),
+            "at least one backoff must have elapsed, got {elapsed:?}"
+        );
+    }
+
+    /// When the pool stays empty (no accounts at all), retry must remain
+    /// bounded and surface the canonical error instead of hanging or masking
+    /// the real condition.
+    #[tokio::test]
+    async fn persistently_empty_pool_returns_error_after_bounded_backoff() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-pool-retry-err-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(tmp_root.join("accounts")).unwrap();
+        let manager = TokenManager::new(tmp_root.clone());
+
+        let started = std::time::Instant::now();
+        let result = manager
+            .get_token_filtered(
+                "default",
+                false,
+                None,
+                "gemini-2.5-flash",
+                &HashSet::new(),
+            )
+            .await;
+        let elapsed = started.elapsed();
+
+        let error = result.expect_err("persistently empty pool must return an error");
+        assert_eq!(error, ERROR_TOKEN_POOL_EMPTY);
+        // 3 attempts => 2 backoffs of 50ms
+        assert!(
+            elapsed >= std::time::Duration::from_millis(95),
+            "two backoffs must elapse, got {elapsed:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "backoff must stay tightly bounded, got {elapsed:?}"
         );
     }
 }

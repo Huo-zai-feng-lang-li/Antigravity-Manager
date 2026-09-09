@@ -5706,12 +5706,36 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         tool_call_cache: std::collections::HashMap::new(),
     };
 
-    while let Some(msg_result) = socket.recv().await {
+    // Reclaim sessions whose client vanished without a Close frame. Long
+    // enough never to interrupt a human thinking pause (10 min); only truly
+    // abandoned connections are collected.
+    let mut close_reason = "normal closure";
+
+    'session: loop {
+        let next_message =
+            tokio::time::timeout(WEBSOCKET_IDLE_TIMEOUT, socket.recv()).await;
+
+        let msg_result = match next_message {
+            Ok(inner) => inner,
+            Err(_) => {
+                tracing::info!(
+                    "responses websocket: idle for {:?}, closing session",
+                    WEBSOCKET_IDLE_TIMEOUT
+                );
+                close_reason = "idle timeout";
+                break 'session;
+            }
+        };
+
         let msg = match msg_result {
-            Ok(m) => m,
-            Err(e) => {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => {
                 tracing::warn!("responses websocket: read message failed: {:?}", e);
-                break;
+                break 'session;
+            }
+            None => {
+                tracing::info!("responses websocket: stream ended by client");
+                break 'session;
             }
         };
 
@@ -5721,11 +5745,20 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 Ok(s) => s,
                 Err(_) => continue,
             },
+            // WebSocket protocol keepalive: a peer (Codex/other IDEs) sends
+            // Ping and expects an immediate Pong; without this it assumes the
+            // connection is dead and stops issuing requests after the upgrade.
+            Message::Ping(payload) => {
+                if let Some(pong) = pong_response_for_ping(&Message::Ping(payload.clone())) {
+                    let _ = socket.send(pong).await;
+                }
+                continue;
+            }
+            Message::Pong(_) => continue,
             Message::Close(_) => {
                 tracing::info!("responses websocket: client disconnected");
-                break;
+                break 'session;
             }
-            _ => continue,
         };
 
         let payload: Value = match serde_json::from_str(&text) {
@@ -5944,6 +5977,50 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             .values()
             .map(|(_, call_id, _, _)| call_id.clone())
             .collect();
+    }
+
+    // Always finish the closing handshake so neither side is left with a
+    // half-open session that can never issue requests again.
+    let close_frame = axum::extract::ws::CloseFrame {
+        code: 1000,
+        reason: std::borrow::Cow::Borrowed(close_reason),
+    };
+    let _ = socket.send(Message::Close(Some(close_frame))).await;
+    let _ = socket.close().await;
+    tracing::info!("Codex responses websocket: session ended ({})", close_reason);
+}
+
+/// Idle sessions are reclaimed after this duration; active streaming is not
+/// bounded by it (the timeout only guards the client-read wait).
+const WEBSOCKET_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Build the Pong reply for a peer Ping (WebSocket keepalive, RFC 6455 §5.5.2).
+/// Extracted as a pure function for unit testing.
+fn pong_response_for_ping(message: &Message) -> Option<Message> {
+    match message {
+        Message::Ping(data) => Some(Message::Pong(data.clone())),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod websocket_session_tests {
+    use super::pong_response_for_ping;
+    use axum::extract::ws::Message;
+
+    #[test]
+    fn ping_gets_matching_pong() {
+        let ping = Message::Ping(b"keepalive".to_vec());
+        match pong_response_for_ping(&ping) {
+            Some(Message::Pong(data)) => assert_eq!(data.as_slice(), b"keepalive"),
+            other => panic!("expected a matching pong, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_ping_messages_have_no_pong() {
+        assert!(pong_response_for_ping(&Message::Pong(Vec::new())).is_none());
+        assert!(pong_response_for_ping(&Message::Close(None)).is_none());
     }
 }
 

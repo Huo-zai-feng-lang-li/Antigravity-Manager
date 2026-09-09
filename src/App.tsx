@@ -138,9 +138,8 @@ function App() {
         if (shouldCheck) {
           setShowUpdateNotification(true);
           // 我们这里只负责显示通知组件，通知组件内部会去调用 check_for_updates
-          // 我们在显示组件后，标记已经检查过了（即便失败或无更新，组件内部也会处理）
-          await invoke('update_last_check_time');
-          console.log('[App] Update check cycle initiated and last check time updated.');
+          // 由通知组件在请求成功后更新检查时间，失败时保留下次重试机会
+          console.log('[App] Update check cycle initiated.');
         }
       } catch (error) {
         console.error('Failed to check update settings:', error);

@@ -3,12 +3,17 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const RELEASE_REPOSITORY: &str = "Huo-zai-feng-lang-li/Antigravity-Manager";
 const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest";
+    "https://api.github.com/repos/Huo-zai-feng-lang-li/Antigravity-Manager/releases/latest";
+const GITHUB_RELEASES_URL: &str =
+    "https://api.github.com/repos/Huo-zai-feng-lang-li/Antigravity-Manager/releases";
+const GITHUB_TAGS_URL: &str =
+    "https://api.github.com/repos/Huo-zai-feng-lang-li/Antigravity-Manager/tags";
 const GITHUB_RAW_URL: &str =
-    "https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/package.json";
+    "https://raw.githubusercontent.com/Huo-zai-feng-lang-li/Antigravity-Manager/main/package.json";
 const JSDELIVR_URL: &str =
-    "https://cdn.jsdelivr.net/gh/lbjlaq/Antigravity-Manager@main/package.json";
+    "https://cdn.jsdelivr.net/gh/Huo-zai-feng-lang-li/Antigravity-Manager@main/package.json";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_CHECK_INTERVAL_HOURS: u64 = 24;
 
@@ -52,72 +57,116 @@ struct GitHubRelease {
     html_url: String,
     body: String,
     published_at: String,
+    #[serde(default)]
+    draft: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTag {
+    name: String,
 }
 
 const UPDATER_JSON_URL: &str =
-    "https://github.com/lbjlaq/Antigravity-Manager/releases/latest/download/updater.json";
+    "https://github.com/Huo-zai-feng-lang-li/Antigravity-Manager/releases/latest/download/updater.json";
+const GHPROXY_PREFIX: &str = "https://ghproxy.net/";
 
-/// Check for updates with improved strategy:
-/// 1. Check updater.json (Source of Truth for Auto-Update)
-/// 2. Fallback to GitHub API (Informational)
+/// Check for updates with multi-tier fallback strategy and candidate aggregation:
+/// 1. Check updater.json (supports direct & ghproxy fallback)
+/// 2. Check GitHub Releases (latest & list)
+/// 3. Check GitHub Tags (handles new tags without finalized releases)
+/// 4. Fallback to GitHub Raw package.json (supports direct & ghproxy fallback)
+/// 5. Fallback to jsDelivr package.json
+///
+/// Aggregates all candidates and resolves the highest available version.
 pub async fn check_for_updates() -> Result<UpdateInfo, String> {
-    // 1. Try updater.json first (Critical for functional Auto-Update)
+    let mut candidates: Vec<UpdateInfo> = Vec::new();
+
+    // 1. Try updater.json
     match check_updater_json().await {
-        Ok(info) => return Ok(info),
+        Ok(info) => candidates.push(info),
         Err(e) => {
-            logger::log_warn(&format!(
-                "updater.json check failed: {}. This might mean artifacts are not ready yet.",
-                e
-            ));
-            // Don't return error immediately, try fallbacks for at least informational update
+            logger::log_warn(&format!("updater.json check failed: {}", e));
         }
     }
 
-    // 2. Try GitHub API
-    match check_github_api().await {
-        Ok(info) => {
-            // If we found an update via API but updater.json failed, we should probably warn or
-            // implies that auto-update won't work yet.
-            // However, the user wants "auto-update to work". If we show "Update Available" based on API
-            // but updater.json is missing, the "Auto Update" button will fail.
-            // So, ideally, if we are in this block, we should perhaps mark it as "Manual Download Only" or similar?
-            // For now, we return it, but maybe the frontend handles "not ready".
-            // Actually, based on User Request, "Update Available" shouldn't show if it's not ready.
-            // But if we return Ok(info) here, the frontend SHOWS it.
-            // If updater.json failed, it likely means the asset isn't uploaded.
-            // So we should maybe return Ok(info) with has_update=false if checking updater.json failed?
-            // Or just log it.
-            // Let's stick to the plan: Prioritize updater.json. If that fails, we fallback.
-            // Use the fallback but maybe the user will see "Auto update failed" and use manual.
-            return Ok(info);
-        }
+    // 2. Try GitHub Releases
+    match check_github_releases().await {
+        Ok(Some(info)) => candidates.push(info),
+        Ok(None) => {}
         Err(e) => {
-            logger::log_warn(&format!(
-                "GitHub API check failed: {}. Trying fallbacks...",
-                e
-            ));
+            logger::log_warn(&format!("GitHub Releases check failed: {}", e));
         }
     }
 
-    // 3. Try GitHub Raw
+    // 3. Try GitHub Tags
+    match check_github_tags().await {
+        Ok(Some(info)) => candidates.push(info),
+        Ok(None) => {}
+        Err(e) => {
+            logger::log_warn(&format!("GitHub Tags check failed: {}", e));
+        }
+    }
+
+    // 4. Try GitHub Raw
     match check_static_url(GITHUB_RAW_URL, "GitHub Raw").await {
-        Ok(info) => return Ok(info),
+        Ok(info) => candidates.push(info),
         Err(e) => {
-            logger::log_warn(&format!(
-                "GitHub Raw check failed: {}. Trying next fallback...",
-                e
-            ));
+            logger::log_warn(&format!("GitHub Raw check failed: {}", e));
         }
     }
 
-    // 4. Try jsDelivr
+    // 5. Try jsDelivr
     match check_static_url(JSDELIVR_URL, "jsDelivr").await {
-        Ok(info) => return Ok(info),
+        Ok(info) => candidates.push(info),
         Err(e) => {
-            logger::log_error(&format!("All update checks failed. Last error: {}", e));
-            return Err(e);
+            logger::log_warn(&format!("jsDelivr check failed: {}", e));
         }
     }
+
+    let current_version = CURRENT_VERSION.to_string();
+    let best = resolve_best_candidate(candidates, &current_version)?;
+
+    logger::log_info(&format!(
+        "Update check complete: latest={}, current={}, has_update={}, source={:?}",
+        best.latest_version, best.current_version, best.has_update, best.source
+    ));
+
+    Ok(best)
+}
+
+/// Resolve the highest available version among all source candidates.
+///
+/// Pure function (no network) so the aggregation, source-priority and
+/// `has_update` recomputation can be unit tested in isolation.
+fn resolve_best_candidate(
+    mut candidates: Vec<UpdateInfo>,
+    current_version: &str,
+) -> Result<UpdateInfo, String> {
+    if candidates.is_empty() {
+        return Err("All update sources failed to resolve a valid version".to_string());
+    }
+
+    let mut best: UpdateInfo = candidates.remove(0);
+
+    for cand in candidates {
+        if compare_versions(&cand.latest_version, &best.latest_version) {
+            best = cand;
+        } else if cand.latest_version == best.latest_version {
+            // When versions match, prefer updater.json or GitHub API with richer release notes/links
+            let is_cand_rich = cand.source.as_deref() == Some("updater.json")
+                || cand.source.as_deref() == Some("GitHub API");
+            let is_best_rich = best.source.as_deref() == Some("updater.json")
+                || best.source.as_deref() == Some("GitHub API");
+            if is_cand_rich && !is_best_rich {
+                best = cand;
+            }
+        }
+    }
+
+    best.current_version = current_version.to_string();
+    best.has_update = compare_versions(&best.latest_version, current_version);
+
+    Ok(best)
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,20 +180,24 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
     let client = create_client().await?;
     logger::log_info("Checking for updates via updater.json...");
 
-    let response = client
-        .get(UPDATER_JSON_URL)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = match client.get(UPDATER_JSON_URL).send().await {
+        Ok(r) if r.status().is_success() => Ok(r),
+        _ => {
+            let mirror_url = format!("{}{}", GHPROXY_PREFIX, UPDATER_JSON_URL);
+            logger::log_info(&format!("Direct updater.json failed, retrying via mirror: {}", mirror_url));
+            client.get(&mirror_url).send().await
+        }
+    }
+    .map_err(|e| format!("Request failed: {}", e))?;
 
-    if !response.status().is_success() {
+    if !resp.status().is_success() {
         return Err(format!(
             "updater.json returned status: {}",
-            response.status()
+            resp.status()
         ));
     }
 
-    let updater_info: UpdaterJson = response
+    let updater_info: UpdaterJson = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse updater.json: {}", e))?;
@@ -166,8 +219,8 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
     }
 
     let download_url = format!(
-        "https://github.com/lbjlaq/Antigravity-Manager/releases/tag/v{}",
-        latest_version
+        "https://github.com/{}/releases/tag/v{}",
+        RELEASE_REPOSITORY, latest_version
     );
 
     Ok(UpdateInfo {
@@ -185,28 +238,56 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
     })
 }
 
+fn detect_proxy() -> Option<String> {
+    // 1. Check user configured upstream proxy first
+    if let Ok(config) = crate::modules::config::load_app_config() {
+        if config.proxy.upstream_proxy.enabled && !config.proxy.upstream_proxy.url.is_empty() {
+            return Some(config.proxy.upstream_proxy.url);
+        }
+    }
+
+    // 2. Check standard proxy environment variables
+    for var in &[
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        if let Ok(val) = std::env::var(var) {
+            let val = val.trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+
+    // 3. Ultra-fast check of common local proxy ports (15ms timeout)
+    let common_ports = [51081, 7890, 7897, 10809, 10808, 20171, 1082];
+    for port in common_ports {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(15)).is_ok() {
+            return Some(format!("http://127.0.0.1:{}", port));
+        }
+    }
+
+    None
+}
+
 async fn create_client() -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .user_agent("Antigravity-Manager")
-        .timeout(std::time::Duration::from_secs(10));
+        .timeout(std::time::Duration::from_secs(4));
 
-    // Load config to check for upstream proxy
-    if let Ok(config) = crate::modules::config::load_app_config() {
-        if config.proxy.upstream_proxy.enabled && !config.proxy.upstream_proxy.url.is_empty() {
-            logger::log_info(&format!(
-                "Update checker using upstream proxy: {}",
-                config.proxy.upstream_proxy.url
-            ));
-            match reqwest::Proxy::all(&config.proxy.upstream_proxy.url) {
-                Ok(proxy) => {
-                    builder = builder.proxy(proxy);
-                }
-                Err(e) => {
-                    logger::log_warn(&format!(
-                        "Failed to parse proxy URL '{}': {}",
-                        config.proxy.upstream_proxy.url, e
-                    ));
-                }
+    if let Some(proxy_url) = detect_proxy() {
+        logger::log_info(&format!("Update checker using proxy: {}", proxy_url));
+        match reqwest::Proxy::all(&proxy_url) {
+            Ok(proxy) => {
+                builder = builder.proxy(proxy);
+            }
+            Err(_) => {
+                logger::log_warn("Failed to parse detected proxy");
             }
         }
     }
@@ -216,51 +297,220 @@ async fn create_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Failed to create HTTP client: {}", e))
 }
 
-async fn check_github_api() -> Result<UpdateInfo, String> {
+async fn check_github_releases() -> Result<Option<UpdateInfo>, String> {
     let client = create_client().await?;
 
-    logger::log_info("Checking for updates via GitHub API...");
+    logger::log_info("Checking for updates via GitHub Releases API...");
 
+    // First try /releases/latest
     let response = client
         .get(GITHUB_API_URL)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    if !response.status().is_success() {
-        return Err(format!("GitHub API returned status: {}", response.status()));
+    if response.status().is_success() {
+        if let Ok(release) = response.json::<GitHubRelease>().await {
+            let latest_version = release.tag_name.trim_start_matches('v').to_string();
+            let current_version = CURRENT_VERSION.to_string();
+            let has_update = compare_versions(&latest_version, &current_version);
+
+            if has_update {
+                logger::log_info(&format!(
+                    "New version found (GitHub API latest): {} (Current: {})",
+                    latest_version, current_version
+                ));
+            }
+            return Ok(Some(UpdateInfo {
+                current_version,
+                latest_version,
+                has_update,
+                download_url: release.html_url,
+                release_notes: release.body,
+                published_at: release.published_at,
+                source: Some("GitHub API".to_string()),
+            }));
+        }
     }
 
-    let release: GitHubRelease = response
+    // Fallback to releases list in case latest tag is not set or prerelease
+    let response_list = client
+        .get(GITHUB_RELEASES_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response_list.status().is_success() {
+        return Err(format!(
+            "GitHub Releases returned status: {}",
+            response_list.status()
+        ));
+    }
+
+    let releases: Vec<GitHubRelease> = response_list
         .json()
         .await
-        .map_err(|e| format!("Failed to parse release info: {}", e))?;
+        .map_err(|e| format!("Failed to parse release info list: {}", e))?;
 
-    let latest_version = release.tag_name.trim_start_matches('v').to_string();
-    let current_version = CURRENT_VERSION.to_string();
-    let has_update = compare_versions(&latest_version, &current_version);
+    let mut best_release: Option<GitHubRelease> = None;
+    let mut best_version = CURRENT_VERSION.to_string();
 
-    if has_update {
-        logger::log_info(&format!(
-            "New version found (API): {} (Current: {})",
-            latest_version, current_version
-        ));
-    } else {
-        logger::log_info(&format!(
-            "Up to date (API): {} (Matches {})",
-            current_version, latest_version
+    for r in releases {
+        if r.draft {
+            continue;
+        }
+        let v = r.tag_name.trim_start_matches('v').to_string();
+        if compare_versions(&v, &best_version) {
+            best_version = v;
+            best_release = Some(r);
+        }
+    }
+
+    if let Some(release) = best_release {
+        let current_version = CURRENT_VERSION.to_string();
+        let has_update = compare_versions(&best_version, &current_version);
+        if has_update {
+            logger::log_info(&format!(
+                "New version found (GitHub Releases list): {} (Current: {})",
+                best_version, current_version
+            ));
+        }
+        return Ok(Some(UpdateInfo {
+            current_version,
+            latest_version: best_version,
+            has_update,
+            download_url: release.html_url,
+            release_notes: release.body,
+            published_at: release.published_at,
+            source: Some("GitHub Releases".to_string()),
+        }));
+    }
+
+    Ok(None)
+}
+
+async fn check_github_tags() -> Result<Option<UpdateInfo>, String> {
+    let client = create_client().await?;
+
+    logger::log_info("Checking for updates via GitHub Tags API...");
+
+    let response = client
+        .get(GITHUB_TAGS_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub Tags returned status: {}",
+            response.status()
         ));
     }
 
-    Ok(UpdateInfo {
-        current_version,
-        latest_version,
-        has_update,
-        download_url: release.html_url,
-        release_notes: release.body,
-        published_at: release.published_at,
-        source: Some("GitHub API".to_string()),
-    })
+    let tags: Vec<GitHubTag> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse tags info: {}", e))?;
+
+    let current_version = CURRENT_VERSION.to_string();
+    let mut remaining = tags;
+
+    // Candidates are verified one by one, highest first. A tag whose name does
+    // not match the package.json version pinned at that commit is treated as a
+    // stale/mis-tagged ref and skipped, so an accidentally high tag on an old
+    // commit can never produce a false "update available".
+    while let Some(index) = highest_tag_index(&remaining, &current_version) {
+        let GitHubTag { name: tag_name } = remaining.remove(index);
+        let tag_version = tag_name.trim_start_matches('v').to_string();
+
+        match fetch_package_version_at_ref(&client, &tag_name).await {
+            Some(pkg_version) if pkg_version == tag_version => {
+                logger::log_info(&format!(
+                    "New version found (GitHub Tags): {} (Current: {})",
+                    tag_version, current_version
+                ));
+                return Ok(Some(UpdateInfo {
+                    current_version,
+                    latest_version: tag_version.clone(),
+                    has_update: true,
+                    download_url: format!(
+                        "https://github.com/{}/releases/tag/{}",
+                        RELEASE_REPOSITORY, tag_name
+                    ),
+                    release_notes: format!(
+                        "New version v{} detected on GitHub tags. Please check release page for details.",
+                        tag_version
+                    ),
+                    published_at: Utc::now().to_rfc3339(),
+                    source: Some("GitHub Tags".to_string()),
+                }));
+            }
+            Some(pkg_version) => {
+                logger::log_warn(&format!(
+                    "Skip tag {}: package.json at that ref reports version {}",
+                    tag_name, pkg_version
+                ));
+            }
+            None => {
+                logger::log_warn(&format!(
+                    "Skip tag {}: unable to verify package.json version at that ref",
+                    tag_name
+                ));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Index of the highest tag newer than `current_version`, or `None`.
+///
+/// Pure function for unit testing; the caller removes the returned index and
+/// may call again to consider lower candidates.
+fn highest_tag_index(tags: &[GitHubTag], current_version: &str) -> Option<usize> {
+    let mut best_index: Option<usize> = None;
+    let mut best_version = current_version.to_string();
+
+    for (index, t) in tags.iter().enumerate() {
+        let v = t.name.trim_start_matches('v').to_string();
+        if compare_versions(&v, &best_version) {
+            best_version = v;
+            best_index = Some(index);
+        }
+    }
+
+    best_index
+}
+
+/// Fetch the package.json version pinned at a tag (raw GitHub first, jsDelivr
+/// mirror as fallback). Returns `None` when the version cannot be verified.
+async fn fetch_package_version_at_ref(
+    client: &reqwest::Client,
+    tag_name: &str,
+) -> Option<String> {
+    let urls = [
+        format!(
+            "https://raw.githubusercontent.com/{}/{}/package.json",
+            RELEASE_REPOSITORY, tag_name
+        ),
+        format!(
+            "https://cdn.jsdelivr.net/gh/{}@{}/package.json",
+            RELEASE_REPOSITORY, tag_name
+        ),
+    ];
+
+    for url in urls {
+        let response = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+
+        if let Ok(package) = response.json::<PackageJson>().await {
+            return Some(package.version.trim_start_matches('v').to_string());
+        }
+    }
+
+    None
 }
 
 #[derive(Deserialize)]
@@ -273,26 +523,37 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
 
     logger::log_info(&format!("Checking for updates via {}...", source_name));
 
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => Ok(r),
+        _ => {
+            if url.contains("github.com") || url.contains("raw.githubusercontent.com") {
+                let mirror_url = format!("{}{}", GHPROXY_PREFIX, url);
+                logger::log_info(&format!(
+                    "Direct {} failed, retrying via mirror: {}",
+                    source_name, mirror_url
+                ));
+                client.get(&mirror_url).send().await
+            } else {
+                client.get(url).send().await
+            }
+        }
+    }
+    .map_err(|e| format!("Request failed: {}", e))?;
 
-    if !response.status().is_success() {
+    if !resp.status().is_success() {
         return Err(format!(
             "{} returned status: {}",
             source_name,
-            response.status()
+            resp.status()
         ));
     }
 
-    let package_json: PackageJson = response
+    let package_json: PackageJson = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse package.json: {}", e))?;
 
-    let latest_version = package_json.version;
+    let latest_version = package_json.version.trim_start_matches('v').to_string();
     let current_version = CURRENT_VERSION.to_string();
     let has_update = compare_versions(&latest_version, &current_version);
 
@@ -308,8 +569,7 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
         ));
     }
 
-    // fallback sources generally don't provide release notes or download specific URL, construct generic
-    let download_url = "https://github.com/lbjlaq/Antigravity-Manager/releases/latest".to_string();
+    let download_url = format!("https://github.com/{}/releases/latest", RELEASE_REPOSITORY);
     let release_notes = format!(
         "New version detected via {}. Please check release page for details.",
         source_name
@@ -321,27 +581,36 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
         has_update,
         download_url,
         release_notes,
-        published_at: Utc::now().to_rfc3339(), // Approximate time
+        published_at: Utc::now().to_rfc3339(),
         source: Some(source_name.to_string()),
     })
 }
 
-/// Compare two semantic versions (e.g., "3.3.30" vs "3.3.29")
-fn compare_versions(latest: &str, current: &str) -> bool {
-    let parse_version =
-        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect() };
+fn parse_version_numbers(v: &str) -> Vec<u32> {
+    let clean = v.trim_start_matches(|c: char| !c.is_ascii_digit());
+    clean
+        .split('.')
+        .map(|segment| {
+            let num_str: String = segment.chars().take_while(|c| c.is_ascii_digit()).collect();
+            num_str.parse::<u32>().unwrap_or(0)
+        })
+        .collect()
+}
 
-    let latest_parts = parse_version(latest);
-    let current_parts = parse_version(current);
+/// Compare two semantic versions (e.g., "4.7.0" vs "4.6.11", "v4.7.0" vs "4.6.11")
+pub fn compare_versions(latest: &str, current: &str) -> bool {
+    let latest_parts = parse_version_numbers(latest);
+    let current_parts = parse_version_numbers(current);
 
-    for i in 0..latest_parts.len().max(current_parts.len()) {
-        let latest_part = latest_parts.get(i).unwrap_or(&0);
-        let current_part = current_parts.get(i).unwrap_or(&0);
+    let max_len = latest_parts.len().max(current_parts.len());
+    for i in 0..max_len {
+        let latest_part = latest_parts.get(i).copied().unwrap_or(0);
+        let current_part = current_parts.get(i).copied().unwrap_or(0);
 
         if latest_part > current_part {
             return true;
         } else if latest_part < current_part {
-            return false; // e.g. local: 3.3.30, remote: 3.3.30 => false
+            return false;
         }
     }
 
@@ -359,7 +628,7 @@ pub fn should_check_for_updates(settings: &UpdateSettings) -> bool {
         .unwrap()
         .as_secs();
 
-    let elapsed_hours = (now - settings.last_check_time) / 3600;
+    let elapsed_hours = now.saturating_sub(settings.last_check_time) / 3600;
     let interval = if settings.check_interval_hours > 0 {
         settings.check_interval_hours
     } else {
@@ -518,8 +787,30 @@ mod tests {
         assert!(compare_versions("3.3.36", "3.3.35"));
         assert!(compare_versions("3.4.0", "3.3.35"));
         assert!(compare_versions("4.0.3", "3.3.35"));
+        assert!(compare_versions("v4.7.0", "4.6.11"));
+        assert!(compare_versions("4.7.0", "v4.6.11"));
+        assert!(compare_versions("v4.7.0-beta.1", "4.6.11"));
         assert!(!compare_versions("3.3.34", "3.3.35"));
         assert!(!compare_versions("3.3.35", "3.3.35"));
+        assert!(!compare_versions("v4.6.11", "4.6.11"));
+        assert!(!compare_versions("4.6.10", "4.6.11"));
+    }
+
+    #[test]
+    fn test_update_sources_follow_release_repository() {
+        let urls = [
+            GITHUB_API_URL,
+            GITHUB_RAW_URL,
+            JSDELIVR_URL,
+            UPDATER_JSON_URL,
+        ];
+
+        for url in urls {
+            assert!(
+                url.contains("Huo-zai-feng-lang-li/Antigravity-Manager"),
+                "update source points to the wrong repository: {url}"
+            );
+        }
     }
 
     #[test]
@@ -535,5 +826,122 @@ mod tests {
 
         settings.auto_check = false;
         assert!(!should_check_for_updates(&settings));
+    }
+
+    #[test]
+    fn test_should_check_for_updates_handles_future_timestamp() {
+        let settings = UpdateSettings {
+            last_check_time: u64::MAX,
+            ..UpdateSettings::default()
+        };
+
+        assert!(!should_check_for_updates(&settings));
+    }
+
+    fn make_candidate(version: &str, source: &str) -> UpdateInfo {
+        UpdateInfo {
+            current_version: String::new(),
+            latest_version: version.to_string(),
+            has_update: false,
+            download_url: String::new(),
+            release_notes: String::new(),
+            published_at: String::new(),
+            source: Some(source.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_resolve_best_candidate_empty_returns_error() {
+        let result = resolve_best_candidate(Vec::new(), "4.6.10");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_best_candidate_picks_highest_version() {
+        // updater.json lags behind GitHub Tags; the highest version must win
+        // regardless of source order.
+        let candidates = vec![
+            make_candidate("4.6.11", "updater.json"),
+            make_candidate("4.7.0", "GitHub Tags"),
+            make_candidate("4.6.9", "jsDelivr"),
+        ];
+
+        let best = resolve_best_candidate(candidates, "4.6.10").expect("candidates present");
+        assert_eq!(best.latest_version, "4.7.0");
+        assert_eq!(best.source.as_deref(), Some("GitHub Tags"));
+        assert!(best.has_update);
+        assert_eq!(best.current_version, "4.6.10");
+    }
+
+    #[test]
+    fn test_resolve_best_candidate_no_update_when_all_older() {
+        let candidates = vec![
+            make_candidate("4.6.9", "GitHub Tags"),
+            make_candidate("4.6.8", "jsDelivr"),
+        ];
+
+        let best = resolve_best_candidate(candidates, "4.6.10").expect("candidates present");
+        assert_eq!(best.latest_version, "4.6.9");
+        assert!(!best.has_update, "older candidates must not report an update");
+    }
+
+    #[test]
+    fn test_resolve_best_candidate_same_version_prefers_rich_source() {
+        let candidates = vec![
+            make_candidate("4.6.11", "jsDelivr"),
+            make_candidate("4.6.11", "updater.json"),
+        ];
+
+        let best = resolve_best_candidate(candidates, "4.6.10").expect("candidates present");
+        assert_eq!(best.latest_version, "4.6.11");
+        assert_eq!(
+            best.source.as_deref(),
+            Some("updater.json"),
+            "richer source must win on version tie"
+        );
+    }
+
+    #[test]
+    fn test_highest_tag_index_finds_newer_tag() {
+        // Simulates a tag pushed without a finalized GitHub Release:
+        // the Tags fallback must still surface the new version.
+        let tags = vec![
+            GitHubTag { name: "v4.6.9".to_string() },
+            GitHubTag { name: "v4.6.11".to_string() },
+            GitHubTag { name: "v4.6.10".to_string() },
+        ];
+
+        let index = highest_tag_index(&tags, "4.6.10").expect("newer tag exists");
+        assert_eq!(tags[index].name, "v4.6.11");
+    }
+
+    #[test]
+    fn test_highest_tag_index_none_when_all_below_current() {
+        let tags = vec![
+            GitHubTag { name: "v4.6.8".to_string() },
+            GitHubTag { name: "v4.6.9".to_string() },
+        ];
+
+        assert!(highest_tag_index(&tags, "4.6.10").is_none());
+    }
+
+    #[test]
+    fn test_highest_tag_index_skips_rejected_candidate_on_retry() {
+        // After the caller removes a mis-tagged high candidate (e.g. v4.7.0
+        // pointing at a 4.6.9 commit), the next call must surface the next
+        // highest valid tag.
+        let tags = vec![
+            GitHubTag { name: "v4.7.0".to_string() },
+            GitHubTag { name: "v4.6.11".to_string() },
+            GitHubTag { name: "v4.6.10".to_string() },
+        ];
+
+        let first = highest_tag_index(&tags, "4.6.10").expect("candidate exists");
+        assert_eq!(tags[first].name, "v4.7.0");
+
+        let mut remaining = tags;
+        remaining.remove(first);
+        let second = highest_tag_index(&remaining, "4.6.10").expect("second candidate exists");
+        assert_eq!(remaining[second].name, "v4.6.11");
     }
 }

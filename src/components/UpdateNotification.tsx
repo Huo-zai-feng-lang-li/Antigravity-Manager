@@ -38,6 +38,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
     try {
       // 1. Check for updates via backend
       const info = await invoke<UpdateInfo>('check_for_updates');
+      await invoke('update_last_check_time');
       if (!info.has_update) {
         onClose();
         return;
@@ -72,10 +73,9 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
 
       const update = await tauriCheck();
       if (!update) {
-        // updater.json not ready yet or no update via native channel
-        console.warn('Native updater returned null');
-        showToast(t('update_notification.toast.not_ready'), 'info');
-        handleClose();
+        // updater.json 尚未就绪或资产未生成时，降级到手动下载模式
+        console.warn('Native updater returned null, fallback to manual download');
+        setUpdateState('manual');
         return;
       }
 
@@ -196,8 +196,8 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
               {updateState === 'error' && `${t('update_notification.toast.failed')}`}
               {updateState === 'manual' && (
                 navigator.language.startsWith('zh')
-                  ? '检测到您当前运行的不是 AppImage 格式，自动更新仅支持 AppImage。请点击下方按钮手动下载更新。'
-                  : 'We detected that you are not running the AppImage version. Auto-updates are only supported for AppImage. Please download the update manually.'
+                  ? '远端已发布最新版本，当前环境下自动安装包未就绪，请点击下方按钮手动下载安装。'
+                  : 'A new version is available. The automatic update package is not ready for your environment; please download and install manually.'
               )}
             </p>
           </div>

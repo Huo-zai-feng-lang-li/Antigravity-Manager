@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { request as invoke } from '../utils/request';
+import { parseTokenStatsTimeRange, setStoredTokenStatsTimeRange, type TokenStatsTimeRange } from '../utils/tokenStats';
 import { useTranslation } from 'react-i18next';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { Clock, Calendar, CalendarDays, Users, Zap, TrendingUp, RefreshCw, Cpu } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 
 interface TokenStatsAggregated {
     period: string;
@@ -51,7 +53,6 @@ interface TokenStatsSummary {
     unique_accounts: number;
 }
 
-type TimeRange = 'hourly' | 'daily' | 'weekly';
 type ViewMode = 'model' | 'account';
 
 const MODEL_COLORS = [
@@ -78,7 +79,8 @@ const shortenModelName = (model: string): string => {
 
 const TokenStats: React.FC = () => {
     const { t } = useTranslation();
-    const [timeRange, setTimeRange] = useState<TimeRange>('daily');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const timeRange: TokenStatsTimeRange = parseTokenStatsTimeRange(searchParams.get('range'));
     const [viewMode, setViewMode] = useState<ViewMode>('model');
     const [chartData, setChartData] = useState<TokenStatsAggregated[]>([]);
     const [accountData, setAccountData] = useState<AccountTokenStats[]>([]);
@@ -90,33 +92,67 @@ const TokenStats: React.FC = () => {
     const [summary, setSummary] = useState<TokenStatsSummary | null>(null);
     const [loading, setLoading] = useState(true);
 
+    const fetchIdRef = useRef(0);
+
+    const setTimeRange = (range: TokenStatsTimeRange) => {
+        setStoredTokenStatsTimeRange(range);
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.set('range', range);
+        setSearchParams(nextParams, { replace: true });
+    };
+
+    // Ensure URL search params reflect the stored preference if missing
+    useEffect(() => {
+        const urlRange = searchParams.get('range');
+        if (!urlRange) {
+            const nextParams = new URLSearchParams(searchParams);
+            nextParams.set('range', timeRange);
+            setSearchParams(nextParams, { replace: true });
+        }
+    }, []);
+
     const fetchData = async () => {
+        const currentFetchId = ++fetchIdRef.current;
         setLoading(true);
         try {
             let hours = 24;
-            let data: TokenStatsAggregated[] = [];
-            let modelTrend: ModelTrendPoint[] = [];
-            let accountTrend: AccountTrendPoint[] = [];
+            let statsPromise: Promise<TokenStatsAggregated[]>;
+            let modelTrendPromise: Promise<ModelTrendPoint[]>;
+            let accountTrendPromise: Promise<AccountTrendPoint[]>;
 
             switch (timeRange) {
                 case 'hourly':
                     hours = 24;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 24 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 24 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 24 });
+                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 24 });
+                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 24 });
+                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 24 });
                     break;
                 case 'daily':
                     hours = 168;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_daily', { days: 7 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 7 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 7 });
+                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_daily', { days: 7 });
+                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 7 });
+                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 7 });
                     break;
                 case 'weekly':
                     hours = 720;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_weekly', { weeks: 4 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 30 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 30 });
+                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_weekly', { weeks: 4 });
+                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 30 });
+                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 30 });
                     break;
+            }
+
+            const [data, modelTrend, accountTrend, accounts, models_stats, summaryData] = await Promise.all([
+                statsPromise,
+                modelTrendPromise,
+                accountTrendPromise,
+                invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours }),
+                invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours }),
+                invoke<TokenStatsSummary>('get_token_stats_summary', { hours })
+            ]);
+
+            // Prevent race condition: discard if another request was triggered afterwards
+            if (currentFetchId !== fetchIdRef.current) {
+                return;
             }
 
             setChartData(data.map(point => ({
@@ -158,19 +194,15 @@ const TokenStats: React.FC = () => {
             });
             setAccountTrendData(transformedAccountTrend);
 
-            const [accounts, models_stats, summaryData] = await Promise.all([
-                invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours }),
-                invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours }),
-                invoke<TokenStatsSummary>('get_token_stats_summary', { hours })
-            ]);
-
             setAccountData(accounts);
             setModelData(models_stats);
             setSummary(summaryData);
         } catch (error) {
             console.error('Failed to fetch token stats:', error);
         } finally {
-            setLoading(false);
+            if (currentFetchId === fetchIdRef.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -178,12 +210,20 @@ const TokenStats: React.FC = () => {
         fetchData();
     }, [timeRange]);
 
-    const pieData = accountData.slice(0, 8).map((account, index) => ({
-        name: account.account_email.split('@')[0] + '...',
-        value: account.total_tokens,
-        fullEmail: account.account_email,
-        color: COLORS[index % COLORS.length]
-    }));
+    const pieData = React.useMemo(() => {
+        return accountData.slice(0, 8).map((account, index) => ({
+            name: account.account_email.split('@')[0] + '...',
+            value: account.total_tokens,
+            fullEmail: account.account_email,
+            color: COLORS[index % COLORS.length]
+        }));
+    }, [accountData]);
+
+    const rangeBadgeText = timeRange === 'hourly'
+        ? t('token_stats.range_hint_hourly', '近 24 小时')
+        : timeRange === 'daily'
+            ? t('token_stats.range_hint_daily', '近 7 天')
+            : t('token_stats.range_hint_weekly', '近 30 天');
 
     const trendChartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | undefined>(undefined);
@@ -380,68 +420,98 @@ const TokenStats: React.FC = () => {
                 </div>
 
                 {summary && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                    <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 transition-opacity duration-200 ${loading ? 'opacity-70' : 'opacity-100'}`}>
                         <div className="bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700">
-                                    <Zap className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                            <div className="flex items-center justify-between gap-2 text-gray-500 dark:text-gray-400 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700">
+                                        <Zap className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.total_tokens', '总 Token')}</span>
                                 </div>
-                                {t('token_stats.total_tokens', '总 Token')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700/80 text-gray-500 dark:text-gray-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-gray-800 dark:text-white">
                                 {formatNumber(summary.total_tokens)}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-blue-50/50 to-white dark:from-blue-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-blue-100 dark:border-blue-900/30 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-blue-600/80 dark:text-blue-400/80 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-blue-100/50 dark:bg-blue-900/30">
-                                    <TrendingUp className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            <div className="flex items-center justify-between gap-2 text-blue-600/80 dark:text-blue-400/80 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-blue-100/50 dark:bg-blue-900/30">
+                                        <TrendingUp className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.input_tokens', '输入 Token')}</span>
                                 </div>
-                                {t('token_stats.input_tokens', '输入 Token')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-100/50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                                 {formatNumber(summary.total_input_tokens)}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-purple-50/50 to-white dark:from-purple-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-purple-100 dark:border-purple-900/30 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-purple-600/80 dark:text-purple-400/80 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-purple-100/50 dark:bg-purple-900/30">
-                                    <TrendingUp className="w-4 h-4 rotate-180 text-purple-600 dark:text-purple-400" />
+                            <div className="flex items-center justify-between gap-2 text-purple-600/80 dark:text-purple-400/80 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-purple-100/50 dark:bg-purple-900/30">
+                                        <TrendingUp className="w-4 h-4 rotate-180 text-purple-600 dark:text-purple-400" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.output_tokens', '输出 Token')}</span>
                                 </div>
-                                {t('token_stats.output_tokens', '输出 Token')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-purple-100/50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
                                 {formatNumber(summary.total_output_tokens)}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-sky-50/50 to-white dark:from-sky-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-sky-100 dark:border-sky-900/30 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-sky-600/80 dark:text-sky-400/80 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-sky-100/50 dark:bg-sky-900/30">
-                                    <Zap className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                            <div className="flex items-center justify-between gap-2 text-sky-600/80 dark:text-sky-400/80 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-sky-100/50 dark:bg-sky-900/30">
+                                        <Zap className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.cached_token', '缓存命中')}</span>
                                 </div>
-                                {t('token_stats.cached_token', '缓存命中')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-100/50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">
                                 {formatNumber(summary.total_cached_tokens)}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-green-50/50 to-white dark:from-green-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-green-100 dark:border-green-900/30 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-green-600/80 dark:text-green-400/80 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-green-100/50 dark:bg-green-900/30">
-                                    <Users className="w-4 h-4 text-green-600 dark:text-green-400" />
+                            <div className="flex items-center justify-between gap-2 text-green-600/80 dark:text-green-400/80 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-green-100/50 dark:bg-green-900/30">
+                                        <Users className="w-4 h-4 text-green-600 dark:text-green-400" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.accounts_used', '活跃账号')}</span>
                                 </div>
-                                {t('token_stats.accounts_used', '活跃账号')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-green-100/50 dark:bg-green-950/40 text-green-600 dark:text-green-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
                                 {summary.unique_accounts}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-orange-50/50 to-white dark:from-orange-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-orange-100 dark:border-orange-900/30 hover:shadow-md transition-shadow">
-                            <div className="flex items-center gap-2 text-orange-600/80 dark:text-orange-400/80 text-sm mb-2">
-                                <div className="p-1.5 rounded-lg bg-orange-100/50 dark:bg-orange-900/30">
-                                    <Cpu className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+                            <div className="flex items-center justify-between gap-2 text-orange-600/80 dark:text-orange-400/80 text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-orange-100/50 dark:bg-orange-900/30">
+                                        <Cpu className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+                                    </div>
+                                    <span className="font-medium">{t('token_stats.models_used', '使用模型')}</span>
                                 </div>
-                                {t('token_stats.models_used', '使用模型')}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-orange-100/50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 font-medium">
+                                    {rangeBadgeText}
+                                </span>
                             </div>
                             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
                                 {modelData.length}

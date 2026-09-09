@@ -1928,8 +1928,28 @@ mod tests {
                 variant_type: Some(VariantType::ClaudeThinking),
             },
             ModelDef {
+                id: "claude-opus-4-5",
+                name: "Claude Opus 4.5",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
                 id: "claude-opus-4-5-thinking",
                 name: "Claude Opus 4.5 Thinking",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
                 context_limit: 200_000,
                 output_limit: 64_000,
                 input_modalities: &["text", "image", "pdf"],
@@ -3171,6 +3191,22 @@ mod canonical_family_tests {
         assert_eq!(
             families,
             vec![
+                CanonicalFamilyDto {
+                    canonical_id: "gemini-3.7-flash".to_string(),
+                    display_name: "Gemini 3.7 Flash".to_string(),
+                    match_ids: vec![
+                        "gemini-3.7-flash".to_string(),
+                        "gemini-3.7-flash-high".to_string(),
+                        "gemini-3.7-flash-medium".to_string(),
+                        "gemini-3.7-flash-low".to_string(),
+                        "gemini-3.7-flash-tiered".to_string(),
+                        "gemini-3.6-flash-high".to_string(),
+                        "gemini-3.6-flash-medium".to_string(),
+                        "gemini-3.6-flash-low".to_string(),
+                        "gemini-3.6-flash".to_string(),
+                        "gemini-3.6-flash-tiered".to_string(),
+                    ],
+                },
                 CanonicalFamilyDto {
                     canonical_id: "gemini-3.5-flash".to_string(),
                     display_name: "Gemini 3.5 Flash".to_string(),

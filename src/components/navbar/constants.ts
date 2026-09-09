@@ -6,6 +6,8 @@ export interface NavItem {
     label: string;
     icon: LucideIcon;
     priority: 'high' | 'medium' | 'low';
+    badge?: string;
+    badgeLabel?: string;
 }
 
 export interface Language {
@@ -32,10 +34,11 @@ export const LANGUAGES: Language[] = [
 
 // 工具函数
 export const isActive = (pathname: string, itemPath: string): boolean => {
-    if (itemPath === '/') {
+    const basePath = itemPath.split('?')[0];
+    if (basePath === '/') {
         return pathname === '/';
     }
-    return pathname.startsWith(itemPath);
+    return pathname.startsWith(basePath);
 };
 
 export const getCurrentNavItem = (pathname: string, navItems: NavItem[]): NavItem => {

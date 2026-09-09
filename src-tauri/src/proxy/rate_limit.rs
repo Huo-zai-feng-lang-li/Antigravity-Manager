@@ -367,6 +367,8 @@ impl RateLimitTracker {
                 .as_deref()
                 .and_then(normalize_image_model_id)
                 .is_some();
+        let uses_configured_quota_backoff =
+            status == 429 && reason == RateLimitReason::QuotaExhausted && !has_explicit_retry_time;
 
         // 4. 处理默认值与软避让逻辑（根据限流类型设置不同默认值）
         let retry_sec = match retry_after_sec {
@@ -475,7 +477,10 @@ impl RateLimitTracker {
         };
 
         let mut retry_sec = retry_sec;
-        if retry_sec > MAX_LOCKOUT_SECONDS && !preserve_long_image_quota {
+        if retry_sec > MAX_LOCKOUT_SECONDS
+            && !preserve_long_image_quota
+            && !uses_configured_quota_backoff
+        {
             tracing::info!(
                 "Capping retry lockout time for {} from {}s to 300s (5 minutes)",
                 account_id,

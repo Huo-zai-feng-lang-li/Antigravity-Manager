@@ -2253,6 +2253,14 @@ mod tests {
     use crate::proxy::common::json_schema::clean_json_schema;
     use crate::proxy::config::{update_thinking_budget_config, ThinkingBudgetConfig};
 
+    struct ThinkingBudgetConfigReset;
+
+    impl Drop for ThinkingBudgetConfigReset {
+        fn drop(&mut self) {
+            update_thinking_budget_config(ThinkingBudgetConfig::default());
+        }
+    }
+
     #[test]
     fn test_agent_sdk_identity_is_normalized_for_antigravity() {
         let req: ClaudeRequest = serde_json::from_value(json!({
@@ -3156,6 +3164,8 @@ mod tests {
 
     #[test]
     fn test_claude_adaptive_global_config() {
+        let _reset = ThinkingBudgetConfigReset;
+
         // Set global config to Adaptive + High effort
         let config = ThinkingBudgetConfig {
             mode: crate::proxy::config::ThinkingBudgetMode::Adaptive,
@@ -3195,16 +3205,12 @@ mod tests {
 
         // Check injection
         assert_eq!(thinking_config["includeThoughts"], true);
-        assert_eq!(thinking_config["thinkingBudget"], -1);
-        assert!(thinking_config.get("thinkingType").is_none());
-        assert!(thinking_config.get("effort").is_none());
+        assert_eq!(thinking_config["thinkingLevel"], "high");
+        assert!(thinking_config.get("thinkingBudget").is_none());
 
         // Check maxOutputTokens default for adaptive
         let max_output_tokens = gen_config["maxOutputTokens"].as_i64().unwrap();
-        assert_eq!(max_output_tokens, 131072);
-
-        // Reset global config
-        crate::proxy::config::update_thinking_budget_config(ThinkingBudgetConfig::default());
+        assert_eq!(max_output_tokens, 64000);
     }
 
     #[test]

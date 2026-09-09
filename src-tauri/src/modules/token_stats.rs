@@ -1,6 +1,8 @@
+use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Aggregated token statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +66,14 @@ pub(crate) fn get_db_path() -> Result<PathBuf, String> {
     Ok(data_dir.join("token_stats.db"))
 }
 
-fn connect_db() -> Result<Connection, String> {
+/// Process-wide shared connection. Token stats are written on every proxied
+/// request; reopening the SQLite file (and re-issuing WAL pragmas) each time
+/// adds avoidable syscall and lock overhead, so one connection is reused.
+/// All public functions are leaf operations (they never call each other while
+/// holding the guard), so the non-reentrant Mutex cannot self-deadlock.
+static STATS_DB: OnceLock<Result<Mutex<Connection>, String>> = OnceLock::new();
+
+fn open_db() -> Result<Connection, String> {
     let db_path = get_db_path()?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
@@ -79,6 +88,13 @@ fn connect_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+fn connect_db() -> Result<MutexGuard<'static, Connection>, String> {
+    match STATS_DB.get_or_init(|| open_db().map(Mutex::new)) {
+        Ok(connection) => Ok(connection.lock()),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 fn add_column_if_missing(conn: &Connection, table: &str, column_def: &str) -> Result<(), String> {
     let sql = format!("ALTER TABLE {} ADD COLUMN {}", table, column_def);
     match conn.execute(&sql, []) {
@@ -91,7 +107,10 @@ fn add_column_if_missing(conn: &Connection, table: &str, column_def: &str) -> Re
 /// Initialize the token stats database
 pub fn init_db() -> Result<(), String> {
     let conn = connect_db()?;
+    init_db_in_connection(&conn)
+}
 
+pub(crate) fn init_db_in_connection(conn: &Connection) -> Result<(), String> {
     // Create main usage table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_usage (
@@ -121,6 +140,18 @@ pub fn init_db() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_token_timestamp_model ON token_usage (timestamp DESC, model, total_tokens)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_token_timestamp_account ON token_usage (timestamp DESC, account_email, total_tokens)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
     // Create hourly aggregation table for fast queries
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_stats_hourly (
@@ -138,12 +169,12 @@ pub fn init_db() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     add_column_if_missing(
-        &conn,
+        conn,
         "token_usage",
         "cached_tokens INTEGER NOT NULL DEFAULT 0",
     )?;
     add_column_if_missing(
-        &conn,
+        conn,
         "token_stats_hourly",
         "total_cached_tokens INTEGER NOT NULL DEFAULT 0",
     )?;
@@ -159,19 +190,39 @@ pub fn record_usage(
     output_tokens: u32,
     cached_tokens: u32,
 ) -> Result<(), String> {
-    let conn = connect_db()?;
-    let timestamp = chrono::Local::now().timestamp();
-    let total_tokens = input_tokens + output_tokens;
+    let mut conn = connect_db()?;
+    record_usage_in_connection(
+        &mut conn,
+        account_email,
+        model,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+    )
+}
+
+fn record_usage_in_connection(
+    conn: &mut Connection,
+    account_email: &str,
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+    cached_tokens: u32,
+) -> Result<(), String> {
+    let now = chrono::Local::now();
+    let timestamp = now.timestamp();
+    let hour_bucket = now.format("%Y-%m-%d %H:00").to_string();
+    let total_tokens = u64::from(input_tokens) + u64::from(output_tokens);
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
 
     // Insert into raw usage table
-    conn.execute(
+    tx.execute(
         "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
-    let hour_bucket = chrono::Local::now().format("%Y-%m-%d %H:00").to_string();
-    conn.execute(
+    tx.execute(
         "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_cached_tokens, total_tokens, request_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
          ON CONFLICT(hour_bucket, account_email) DO UPDATE SET
@@ -183,7 +234,7 @@ pub fn record_usage(
         params![hour_bucket, account_email, input_tokens, output_tokens, cached_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
-    Ok(())
+    tx.commit().map_err(|e| e.to_string())
 }
 
 /// Get hourly aggregated stats for a time range
@@ -606,9 +657,113 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_and_query() {
-        // This would need a test database setup
-        // For now, just verify the module compiles
-        assert!(true);
+    fn test_record_usage_writes_raw_and_hourly_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                account_email TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cached_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL
+            );
+            CREATE TABLE token_stats_hourly (
+                hour_bucket TEXT NOT NULL,
+                account_email TEXT NOT NULL,
+                total_input_tokens INTEGER NOT NULL,
+                total_output_tokens INTEGER NOT NULL,
+                total_cached_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                request_count INTEGER NOT NULL,
+                PRIMARY KEY (hour_bucket, account_email)
+            );",
+        )
+        .unwrap();
+
+        record_usage_in_connection(&mut conn, "user@example.com", "model", u32::MAX, 1, 2).unwrap();
+
+        let raw: (u32, u64) = conn
+            .query_row(
+                "SELECT input_tokens, total_tokens FROM token_usage",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(raw, (u32::MAX, u64::from(u32::MAX) + 1));
+
+        let aggregate: (u32, u32, u64) = conn
+            .query_row(
+                "SELECT total_input_tokens, total_output_tokens, total_tokens
+                 FROM token_stats_hourly",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(aggregate, (u32::MAX, 1, u64::from(u32::MAX) + 1));
+    }
+
+    #[test]
+    fn test_record_usage_rolls_back_when_hourly_write_fails() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                account_email TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cached_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL
+            );
+            CREATE TABLE token_stats_hourly (
+                hour_bucket TEXT NOT NULL,
+                account_email TEXT NOT NULL,
+                total_input_tokens INTEGER NOT NULL,
+                total_output_tokens INTEGER NOT NULL,
+                total_cached_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                request_count INTEGER NOT NULL,
+                PRIMARY KEY (hour_bucket, account_email)
+            );
+            CREATE TRIGGER fail_hourly_insert
+            BEFORE INSERT ON token_stats_hourly
+            BEGIN
+                SELECT RAISE(ABORT, 'forced hourly failure');
+            END;",
+        )
+        .unwrap();
+
+        assert!(
+            record_usage_in_connection(&mut conn, "user@example.com", "model", 1, 2, 0).is_err()
+        );
+
+        let raw_count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM token_usage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(raw_count, 0);
+    }
+
+    #[test]
+    fn test_init_db_creates_tables_and_composite_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db_in_connection(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='token_usage'")
+            .unwrap();
+        let indexes: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+
+        assert!(indexes.contains(&"idx_token_timestamp".to_string()));
+        assert!(indexes.contains(&"idx_token_account".to_string()));
+        assert!(indexes.contains(&"idx_token_timestamp_model".to_string()));
+        assert!(indexes.contains(&"idx_token_timestamp_account".to_string()));
     }
 }

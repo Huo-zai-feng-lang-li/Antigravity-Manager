@@ -1,11 +1,13 @@
 import { LayoutDashboard, Users, Network, Activity, BarChart3, Settings, Lock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { isTauri, isLinux } from '../../utils/env';
 import { NavLogo } from './NavLogo';
 import { NavMenu } from './NavMenu';
 import { NavSettings } from './NavSettings';
 import type { NavItem } from './constants';
+import { getTimeRangeShortBadge, parseTokenStatsTimeRange } from '../../utils/tokenStats';
 
 /**
  * Navbar 主组件
@@ -16,14 +18,29 @@ import type { NavItem } from './constants';
 function Navbar() {
     const { t } = useTranslation();
     const { config, saveConfig } = useConfigStore();
+    const location = useLocation();
+    const [searchParams] = useSearchParams();
+    const currentRange = parseTokenStatsTimeRange(searchParams.get('range'));
+    const isTokenStats = location.pathname === '/token-stats';
+    const rangeLabel = t(`token_stats.${currentRange}`);
+    const tokenStatsLabel = isTokenStats
+        ? `${t('nav.token_stats', 'Token 统计')} · ${rangeLabel}`
+        : t('nav.token_stats', 'Token 统计');
 
-    // 创建导航项(包含翻译后的标签)
+    // 创建导航项(包含翻译后的标签与当前状态徽标)
     const navItems: NavItem[] = [
         { path: '/', label: t('nav.dashboard'), icon: LayoutDashboard, priority: 'high' },
         { path: '/accounts', label: t('nav.accounts'), icon: Users, priority: 'high' },
         { path: '/api-proxy', label: t('nav.proxy'), icon: Network, priority: 'high' },
         { path: '/monitor', label: t('nav.call_records'), icon: Activity, priority: 'medium' },
-        { path: '/token-stats', label: t('nav.token_stats', 'Token 统计'), icon: BarChart3, priority: 'low' },
+        {
+            path: `/token-stats?range=${currentRange}`,
+            label: tokenStatsLabel,
+            icon: BarChart3,
+            priority: 'low',
+            badge: getTimeRangeShortBadge(currentRange),
+            badgeLabel: rangeLabel,
+        },
         { path: '/user-token', label: t('nav.user_token', 'User Tokens'), icon: Users, priority: 'medium' },
         { path: '/security', label: t('nav.security'), icon: Lock, priority: 'low' },
         { path: '/settings', label: t('nav.settings'), icon: Settings, priority: 'high' },

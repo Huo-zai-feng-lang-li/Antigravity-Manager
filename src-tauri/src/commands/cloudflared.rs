@@ -68,13 +68,18 @@ pub async fn cloudflared_install(
 #[tauri::command]
 pub async fn cloudflared_start(
     state: State<'_, CloudflaredState>,
+    proxy_state: State<'_, crate::commands::proxy::ProxyServiceState>,
     config: CloudflaredConfig,
 ) -> Result<CloudflaredStatus, String> {
     state.ensure_manager().await?;
 
     let lock = state.manager.read().await;
     if let Some(manager) = lock.as_ref() {
-        manager.start(config).await
+        let result = manager.start(config).await;
+        if result.is_ok() {
+            proxy_state.set_public_tunnel_active(true).await;
+        }
+        result
     } else {
         Err("Manager not initialized".to_string())
     }
@@ -84,12 +89,17 @@ pub async fn cloudflared_start(
 #[tauri::command]
 pub async fn cloudflared_stop(
     state: State<'_, CloudflaredState>,
+    proxy_state: State<'_, crate::commands::proxy::ProxyServiceState>,
 ) -> Result<CloudflaredStatus, String> {
     state.ensure_manager().await?;
 
     let lock = state.manager.read().await;
     if let Some(manager) = lock.as_ref() {
-        manager.stop().await
+        let result = manager.stop().await;
+        if result.is_ok() {
+            proxy_state.set_public_tunnel_active(false).await;
+        }
+        result
     } else {
         Err("Manager not initialized".to_string())
     }

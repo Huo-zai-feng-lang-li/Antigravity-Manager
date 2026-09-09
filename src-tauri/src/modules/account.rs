@@ -519,6 +519,24 @@ mod tests {
         assert!(!updated.live_limited_models.contains_key("gemini-2.5-pro"));
         std::env::remove_var("ABV_DATA_DIR");
     }
+
+    #[test]
+    fn reentrancy_guard_blocks_while_held_and_releases_on_drop() {
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(false);
+
+        {
+            let first = ReentrancyGuard::acquire(&flag).expect("first acquire succeeds");
+            assert!(
+                ReentrancyGuard::acquire(&flag).is_none(),
+                "second acquire must be blocked while held"
+            );
+            drop(first);
+        }
+
+        let _again = ReentrancyGuard::acquire(&flag)
+            .expect("acquire must succeed again after the guard is dropped");
+    }
 }
 
 /// Global account write lock to prevent corruption during concurrent operations
@@ -1887,7 +1905,10 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
     };
 
     if token.access_token != account.token.access_token {
-        modules::logger::log_info(&format!("Time-based Token refresh: {}", account.email));
+        modules::logger::log_info(&format!(
+            "Time-based Token refresh: {}",
+            crate::proxy::upstream::client::mask_email(&account.email)
+        ));
         account.token = token.clone();
 
         // Get display name (incidental to Token refresh)
@@ -2118,11 +2139,55 @@ pub struct RefreshStats {
     pub details: Vec<String>,
 }
 
+/// Set while a full quota refresh batch is running.
+static BATCH_REFRESH_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// RAII reentrancy guard over an `AtomicBool`: `acquire` flips false -> true
+/// exactly once and returns `None` while already held; dropping releases it.
+struct ReentrancyGuard<'a> {
+    flag: &'a std::sync::atomic::AtomicBool,
+}
+
+impl<'a> ReentrancyGuard<'a> {
+    fn acquire(flag: &'a std::sync::atomic::AtomicBool) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self { flag })
+    }
+}
+
+impl Drop for ReentrancyGuard<'_> {
+    fn drop(&mut self) {
+        self.flag
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Core logic to batch refresh all account quotas (decoupled from Tauri status)
 pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
     use futures::future::join_all;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
+
+    // Reentrancy guard: a full refresh of dozens of accounts takes ~30s. When
+    // the UI interval (or several event triggers) fires again before the prior
+    // batch finishes, overlapping batches multiply upstream QuotaSummary calls
+    // (and 403 probing), which raises Google risk-control exposure. Skip a
+    // batch while one is already running; the guard is released by RAII even
+    // on early return or panic.
+    let Some(_batch_guard) = ReentrancyGuard::acquire(&BATCH_REFRESH_RUNNING) else {
+        crate::modules::logger::log_warn(
+            "Batch refresh skipped: a previous batch is still running",
+        );
+        return Ok(RefreshStats {
+            total: 0,
+            success: 0,
+            failed: 0,
+            details: Vec::new(),
+        });
+    };
 
     const MAX_CONCURRENT: usize = 5;
     let start = std::time::Instant::now();
@@ -2146,7 +2211,7 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
                 if q.is_forbidden {
                     crate::modules::logger::log_info(&format!(
                         "  - Skipping {} (Forbidden)",
-                        account.email
+                        crate::proxy::upstream::client::mask_email(&account.email)
                     ));
                     return false;
                 }
@@ -2159,22 +2224,36 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
             let permit = semaphore.clone();
             async move {
                 let _guard = permit.acquire().await.unwrap();
-                crate::modules::logger::log_info(&format!("  - Processing {}", email));
+                // Logs are masked per the zero-credential-leakage rule; the
+                // error returned to the UI keeps the full address so the user
+                // can identify which account failed.
+                let masked_email = crate::proxy::upstream::client::mask_email(&email);
+                crate::modules::logger::log_info(&format!(
+                    "  - Processing {}",
+                    masked_email
+                ));
                 match fetch_quota_with_retry(&mut account).await {
                     Ok(quota) => {
                         if let Err(e) = update_account_quota(&account_id, quota) {
-                            let msg = format!("Account {}: Save quota failed - {}", email, e);
-                            crate::modules::logger::log_error(&msg);
-                            Err(msg)
+                            crate::modules::logger::log_error(&format!(
+                                "Account {}: Save quota failed - {}",
+                                masked_email, e
+                            ));
+                            Err(format!("Account {}: Save quota failed - {}", email, e))
                         } else {
-                            crate::modules::logger::log_info(&format!("    Success {}", email));
+                            crate::modules::logger::log_info(&format!(
+                                "    Success {}",
+                                masked_email
+                            ));
                             Ok(())
                         }
                     }
                     Err(e) => {
-                        let msg = format!("Account {}: Fetch quota failed - {}", email, e);
-                        crate::modules::logger::log_error(&msg);
-                        Err(msg)
+                        crate::modules::logger::log_error(&format!(
+                            "Account {}: Fetch quota failed - {}",
+                            masked_email, e
+                        ));
+                        Err(format!("Account {}: Fetch quota failed - {}", email, e))
                     }
                 }
             }

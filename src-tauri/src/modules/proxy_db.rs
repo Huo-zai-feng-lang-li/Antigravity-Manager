@@ -82,8 +82,33 @@ pub fn init_db() -> Result<(), String> {
     Ok(())
 }
 
+/// 单条请求日志中 request_body / response_body 的最大存储字节数。
+/// 防止超大请求体（如长对话上下文、完整工具定义）导致数据库无限膨胀。
+const BODY_STORE_LIMIT: usize = 16 * 1024;
+
+/// 截断过长的 body 字段，超限部分以截断标记结尾（保证不切坏 UTF-8 字符边界）。
+fn truncate_body(body: &str, limit: usize) -> String {
+    if body.len() <= limit {
+        return body.to_string();
+    }
+    let mut end = limit;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...[truncated {} chars]", &body[..end], body.len() - end)
+}
+
 pub fn save_log(log: &ProxyRequestLog) -> Result<(), String> {
     let conn = connect_db()?;
+
+    let request_body = log
+        .request_body
+        .as_deref()
+        .map(|b| truncate_body(b, BODY_STORE_LIMIT));
+    let response_body = log
+        .response_body
+        .as_deref()
+        .map(|b| truncate_body(b, BODY_STORE_LIMIT));
 
     conn.execute(
         "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username)
@@ -97,8 +122,8 @@ pub fn save_log(log: &ProxyRequestLog) -> Result<(), String> {
             log.duration,
             log.model,
             log.error,
-            log.request_body,
-            log.response_body,
+            request_body,
+            response_body,
             log.input_tokens,
             log.output_tokens,
             log.cached_tokens,
@@ -564,4 +589,36 @@ pub fn get_token_usage_by_ip(limit: usize, hours: i64) -> Result<Vec<IpTokenStat
     }
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_body_short_stays_unchanged() {
+        let s = "short body";
+        assert_eq!(truncate_body(s, BODY_STORE_LIMIT), s);
+    }
+
+    #[test]
+    fn test_truncate_body_long_is_truncated_with_marker() {
+        let long = "x".repeat(20 * 1024);
+        let out = truncate_body(&long, BODY_STORE_LIMIT);
+        assert!(out.len() < long.len());
+        assert!(out.contains("[truncated"));
+        assert!(out.ends_with("]"));
+    }
+
+    #[test]
+    fn test_truncate_body_utf8_boundary_safe() {
+        // 中文是多字节 UTF-8，截断点必须落在字符边界，不能切坏字符
+        let long = "你".repeat(10 * 1024);
+        let out = truncate_body(&long, 100);
+        assert!(out.len() <= 100 + "[truncated N chars]".len() + 12);
+        // 重新解析必须成功（说明没有切坏 UTF-8）
+        assert!(String::from_utf8(out.clone().into_bytes()).is_ok());
+        // 截断点本身必须是字符边界
+        assert!(out.is_char_boundary(out.len()));
+    }
 }

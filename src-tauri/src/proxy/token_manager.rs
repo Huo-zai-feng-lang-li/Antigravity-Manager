@@ -144,6 +144,16 @@ pub struct ProxyToken {
     pub model_limits: HashMap<String, u64>, // [NEW] max_output_tokens per model from quota data
 }
 
+/// Sticky 会话绑定条目（含绑定时间，用于定期清理过期绑定）。
+struct StickyBinding {
+    account_id: String,
+    bound_at: std::time::Instant,
+}
+
+/// Sticky 绑定最长存活时间：绑定后 48 小时未被命中即视为过期可清理，
+/// 防止长期运行时 session_accounts 随会话数量缓慢累积。
+const STICKY_BINDING_TTL: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
+
 pub struct TokenManager {
     tokens: Arc<DashMap<String, ProxyToken>>, // account_id -> ProxyToken
     current_index: Arc<AtomicUsize>,
@@ -151,7 +161,7 @@ pub struct TokenManager {
     data_dir: PathBuf,
     rate_limit_tracker: Arc<RateLimitTracker>, // 新增: 限流跟踪器
     sticky_config: Arc<tokio::sync::RwLock<StickySessionConfig>>, // 新增：调度配置
-    session_accounts: Arc<DashMap<String, String>>, // 新增：会话与账号映射 (SessionID -> AccountID)
+    session_accounts: Arc<DashMap<String, StickyBinding>>, // 新增：会话与账号映射 (SessionID -> StickyBinding)
     preferred_account_id: Arc<tokio::sync::RwLock<Option<String>>>, // [FIX #820] 优先使用的账号ID（固定账号模式）
     health_scores: Arc<DashMap<String, f32>>,                       // account_id -> health_score
     circuit_breaker_config: Arc<tokio::sync::RwLock<crate::models::CircuitBreakerConfig>>, // [NEW] 熔断配置缓存
@@ -227,6 +237,7 @@ impl TokenManager {
     /// 启动限流记录自动清理后台任务（每15秒检查并清除过期记录）
     pub async fn start_auto_cleanup(&self) {
         let tracker = self.rate_limit_tracker.clone();
+        let session_accounts = self.session_accounts.clone();
         let cancel = self.cancel_token.child_token();
 
         let handle = tokio::spawn(async move {
@@ -243,6 +254,16 @@ impl TokenManager {
                             tracing::info!(
                                 "Auto-cleanup: Removed {} expired rate limit record(s)",
                                 cleaned
+                            );
+                        }
+                        // 清理超过 TTL 未使用的 sticky 会话绑定，防止长期运行内存缓慢累积
+                        let before = session_accounts.len();
+                        session_accounts.retain(|_, v| v.bound_at.elapsed() < STICKY_BINDING_TTL);
+                        let removed = before - session_accounts.len();
+                        if removed > 0 {
+                            tracing::info!(
+                                "Auto-cleanup: Removed {} expired sticky session binding(s)",
+                                removed
                             );
                         }
                     }
@@ -400,7 +421,8 @@ impl TokenManager {
         }
         self.health_scores.remove(account_id);
         self.rate_limit_tracker.clear(account_id);
-        self.session_accounts.retain(|_, v| v != account_id);
+        self.session_accounts
+            .retain(|_, v| v.account_id != account_id);
         if let Ok(mut preferred) = self.preferred_account_id.try_write() {
             if preferred.as_deref() == Some(account_id) {
                 *preferred = None;
@@ -2026,7 +2048,11 @@ impl TokenManager {
                 let sid = session_id.unwrap();
 
                 // 1. 检查会话是否已绑定账号
-                if let Some(bound_id) = self.session_accounts.get(sid).map(|v| v.clone()) {
+                if let Some(bound_id) = self
+                    .session_accounts
+                    .get(sid)
+                    .map(|v| v.value().account_id.clone())
+                {
                     // 【修复】先通过 account_id 找到对应的账号，获取其 email
                     // 2. 转换 email -> account_id 检查绑定的账号是否限流
                     if let Some(bound_token) =
@@ -2144,8 +2170,13 @@ impl TokenManager {
                         // 如果是会话首次分配且需要粘性，在此建立绑定
                         if let Some(sid) = session_id {
                             if scheduling.mode != SchedulingMode::PerformanceFirst {
-                                self.session_accounts
-                                    .insert(sid.to_string(), selected.account_id.clone());
+                                self.session_accounts.insert(
+                                    sid.to_string(),
+                                    StickyBinding {
+                                        account_id: selected.account_id.clone(),
+                                        bound_at: std::time::Instant::now(),
+                                    },
+                                );
                                 tracing::debug!(
                                     "Sticky Session: Bound new account {} to session {}",
                                     selected.email,
@@ -3869,7 +3900,8 @@ impl TokenManager {
         .await?;
 
         // Clear sticky session if blocked
-        self.session_accounts.retain(|_, v| *v != account_id);
+        self.session_accounts
+            .retain(|_, v| v.account_id != account_id);
 
         tracing::info!(
             "🚫 Account {} validation blocked until {} (reason: {})",
@@ -3898,7 +3930,8 @@ impl TokenManager {
         crate::modules::account::mark_account_forbidden(account_id, reason)?;
 
         // Clear sticky session if forbidden
-        self.session_accounts.retain(|_, v| *v != account_id);
+        self.session_accounts
+            .retain(|_, v| v.account_id != account_id);
 
         // [FIX] 从内存池中移除账号，避免重试时再次选中
         self.remove_account(account_id);
@@ -4046,9 +4079,13 @@ mod tests {
             .is_rate_limited(account_id, Some(temporary_model)));
 
         // Prime extra caches to ensure remove_account() is really called.
-        manager
-            .session_accounts
-            .insert("sid1".to_string(), account_id.to_string());
+        manager.session_accounts.insert(
+            "sid1".to_string(),
+            StickyBinding {
+                account_id: account_id.to_string(),
+                bound_at: std::time::Instant::now(),
+            },
+        );
         {
             let mut preferred = manager.preferred_account_id.write().await;
             *preferred = Some(account_id.to_string());
@@ -4549,7 +4586,10 @@ mod tests {
             .unwrap();
         assert_eq!(account_id, "acc1");
         assert_eq!(
-            manager.session_accounts.get("sid1").map(|v| v.clone()),
+            manager
+                .session_accounts
+                .get("sid1")
+                .map(|v| v.value().account_id.clone()),
             Some("acc1".to_string())
         );
 
@@ -4566,7 +4606,10 @@ mod tests {
         assert_eq!(email, "b@test.com");
         assert!(manager.tokens.get("acc1").is_none());
         assert_ne!(
-            manager.session_accounts.get("sid1").map(|v| v.clone()),
+            manager
+                .session_accounts
+                .get("sid1")
+                .map(|v| v.value().account_id.clone()),
             Some("acc1".to_string())
         );
 

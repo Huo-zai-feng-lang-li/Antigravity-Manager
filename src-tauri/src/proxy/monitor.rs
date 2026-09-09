@@ -62,6 +62,38 @@ impl ProxyMonitor {
             },
         );
 
+        // 运行期定期维护任务：每 6 小时执行一次日志清理。
+        // 启动时的一次性清理只覆盖当次启动，长期运行（不重启）期间
+        // 日志文件与数据库会持续增长，这里保证磁盘占用有界。
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            // 跳过首次立即触发（启动时已执行过一次性清理）
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let result = tokio::task::spawn_blocking(|| {
+                    let app_logs = crate::modules::logger::cleanup_old_logs(7);
+                    let db_by_age = crate::modules::proxy_db::cleanup_old_logs(30);
+                    let db_by_cap = crate::modules::proxy_db::limit_max_logs(2000);
+                    (app_logs, db_by_age, db_by_cap)
+                })
+                .await;
+                match result {
+                    Ok((app_logs, db_by_age, db_by_cap)) => {
+                        tracing::info!(
+                            "Periodic maintenance done: app_logs={:?}, db_by_age={:?}, db_by_cap={:?}",
+                            app_logs,
+                            db_by_age,
+                            db_by_cap
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Periodic maintenance task failed: {}", e);
+                    }
+                }
+            }
+        });
+
         Self {
             logs: RwLock::new(VecDeque::with_capacity(max_logs)),
             stats: RwLock::new(ProxyStats::default()),

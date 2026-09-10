@@ -13,6 +13,10 @@ use crate::proxy::mappers::openai::{
 };
 // use crate::proxy::upstream::client::UpstreamClient; // 通过 state 获取
 use crate::proxy::debug_logger;
+use crate::proxy::middleware::monitor::{
+    extract_cached_tokens, extract_input_tokens, extract_output_tokens, record_user_token_usage,
+};
+use crate::proxy::monitor::ProxyRequestLog;
 use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 
@@ -5710,8 +5714,45 @@ pub async fn handle_responses_websocket(
     ws.on_upgrade(move |socket| handle_websocket_session(socket, headers, state))
 }
 
+/// [FIX] 上游未返回 usage 元数据时，用请求体估算输入 token，保证账户级用量统计不缺失。
+/// 与 HTTP 路径 monitor.rs 的 fallback 行为对齐。
+fn estimate_input_tokens_fallback(request_body: Option<&str>) -> Option<u32> {
+    request_body
+        .map(crate::proxy::mappers::context_manager::estimate_raw_tokens_from_payload)
+        .filter(|&estimated| estimated > 0)
+}
+
 async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, state: AppState) {
     tracing::info!("Codex responses websocket: client connected");
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        });
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let user_token_identity = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .and_then(|raw_token| {
+            let token_str = raw_token.trim();
+            match crate::modules::user_token_db::get_token_by_value(token_str) {
+                Ok(Some(token_info)) => Some(crate::proxy::middleware::auth::UserTokenIdentity {
+                    token_id: token_info.id,
+                    token: token_str.to_string(),
+                    username: token_info.username,
+                }),
+                _ => None,
+            }
+        });
     let mut session_state = WebsocketSessionState {
         last_request: None,
         last_response_output: json!([]),
@@ -5827,16 +5868,51 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             continue;
         }
 
+        let request_start = std::time::Instant::now();
         let normalized = match normalize_responses_websocket_request(payload, &mut session_state) {
             Ok(n) => n,
             Err(e) => {
+                let error_msg = e.clone();
                 let error_ev = build_ws_error_event(400, "invalid_request_error", e);
                 let _ = socket.send(Message::Text(error_ev.to_string())).await;
+                let err_log = ProxyRequestLog {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                    method: "WS".to_string(),
+                    url: "/v1/responses".to_string(),
+                    status: 400,
+                    duration: request_start.elapsed().as_millis() as u64,
+                    model: None,
+                    mapped_model: None,
+                    account_email: None,
+                    client_ip: client_ip.clone(),
+                    error: Some(error_msg),
+                    request_body: None,
+                    response_body: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cached_tokens: None,
+                    protocol: Some("openai".to_string()),
+                    username: user_token_identity.as_ref().map(|i| i.username.clone()),
+                };
+                record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
+                let _ = state.monitor.log_request(err_log).await;
                 continue;
             }
         };
 
         let openai_body = convert_codex_to_openai_request(normalized);
+        let requested_model = openai_body
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // [FIX] 仅当监控开启或存在用户令牌（需要用量统计）时才序列化请求体，
+        // 避免 Codex 大上下文在无观测需求时产生无谓的 CPU/内存开销。
+        let openai_body_str = if state.monitor.is_enabled() || user_token_identity.is_some() {
+            Some(openai_body.to_string())
+        } else {
+            None
+        };
 
         // [FIX] 先分配 response/item id 并“立即”下发 response.created 首帧。
         // 旧实现要等 handle_chat_completions 内部 peek 到上游首个有效 SSE 块才返回，
@@ -5857,10 +5933,14 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             accumulated_text: String::new(),
             tool_calls: std::collections::HashMap::new(),
             tool_calls_added: std::collections::HashSet::new(),
+            usage: None,
         };
         let created_ev = build_ws_created_event(&translation_state.response_id);
         let mut outgoing_ws_events = Vec::new();
-        send_ws_event(&mut socket, &mut outgoing_ws_events, &created_ev).await;
+        if !send_ws_event(&mut socket, &mut outgoing_ws_events, &created_ev).await {
+            // 首帧都发不出去说明客户端已断开，跳过本次请求
+            continue;
+        }
 
         let response_result =
             handle_chat_completions(State(state.clone()), headers.clone(), Json(openai_body)).await;
@@ -5868,19 +5948,74 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let response = match response_result {
             Ok(res) => res.into_response(),
             Err((status, err_msg)) => {
+                let msg_clone = err_msg.clone();
                 let error_ev = build_ws_error_event(status.as_u16(), "server_error", err_msg);
                 let _ = socket.send(Message::Text(error_ev.to_string())).await;
+                let err_log = ProxyRequestLog {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                    method: "WS".to_string(),
+                    url: "/v1/responses".to_string(),
+                    status: status.as_u16(),
+                    duration: request_start.elapsed().as_millis() as u64,
+                    model: requested_model.clone(),
+                    mapped_model: None,
+                    account_email: None,
+                    client_ip: client_ip.clone(),
+                    error: Some(msg_clone),
+                    request_body: openai_body_str.clone(),
+                    response_body: None,
+                    input_tokens: estimate_input_tokens_fallback(openai_body_str.as_deref()),
+                    output_tokens: None,
+                    cached_tokens: None,
+                    protocol: Some("openai".to_string()),
+                    username: user_token_identity.as_ref().map(|i| i.username.clone()),
+                };
+                record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
+                let _ = state.monitor.log_request(err_log).await;
                 continue;
             }
         };
 
+        // [FIX] 提取上游元数据（账户邮箱 / 实际映射模型），供流量日志与账户级 Token 统计使用。
+        let account_email = response
+            .headers()
+            .get("X-Account-Email")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let mapped_model = response
+            .headers()
+            .get("X-Mapped-Model")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         if !response.status().is_success() {
-            let error_ev = build_ws_error_event(
-                response.status().as_u16(),
-                "server_error",
-                format!("Upstream returned status {}", response.status()),
-            );
+            let status_code = response.status().as_u16();
+            let err_text = format!("Upstream returned status {}", response.status());
+            let error_ev = build_ws_error_event(status_code, "server_error", err_text.clone());
             let _ = socket.send(Message::Text(error_ev.to_string())).await;
+            let err_log = ProxyRequestLog {
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                method: "WS".to_string(),
+                url: "/v1/responses".to_string(),
+                status: status_code,
+                duration: request_start.elapsed().as_millis() as u64,
+                model: requested_model.clone(),
+                mapped_model: mapped_model.clone(),
+                account_email: account_email.clone(),
+                client_ip: client_ip.clone(),
+                error: Some(err_text),
+                request_body: openai_body_str.clone(),
+                response_body: None,
+                input_tokens: estimate_input_tokens_fallback(openai_body_str.as_deref()),
+                output_tokens: None,
+                cached_tokens: None,
+                protocol: Some("openai".to_string()),
+                username: user_token_identity.as_ref().map(|i| i.username.clone()),
+            };
+            record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
+            let _ = state.monitor.log_request(err_log).await;
             continue;
         }
 
@@ -5909,13 +6044,17 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                         break;
                     }
                     if let Ok(chunk_json) = serde_json::from_str::<Value>(json_part) {
-                        translate_openai_chunk_to_ws(
+                        if !translate_openai_chunk_to_ws(
                             &chunk_json,
                             &mut translation_state,
                             &mut socket,
                             &mut outgoing_ws_events,
                         )
-                        .await;
+                        .await
+                        {
+                            // 客户端已断开，立即终止上游流，避免 zombie stream 白烧 token
+                            break;
+                        }
                     }
                 }
             }
@@ -5928,20 +6067,24 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                     let json_part = line.trim_start_matches("data: ").trim();
                     if json_part != "[DONE]" {
                         if let Ok(chunk_json) = serde_json::from_str::<Value>(json_part) {
-                            translate_openai_chunk_to_ws(
+                            if !translate_openai_chunk_to_ws(
                                 &chunk_json,
                                 &mut translation_state,
                                 &mut socket,
                                 &mut outgoing_ws_events,
                             )
-                            .await;
+                            .await
+                            {
+                                // 客户端已断开，跳过本次请求收尾
+                                continue;
+                            }
                         }
                     }
                 }
             }
         }
 
-        let completed_output = finalize_ws_events(
+        let (completed_output, _finalized_ok) = finalize_ws_events(
             &mut translation_state,
             &mut socket,
             &mut session_state,
@@ -5964,6 +6107,46 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             )
             .await;
         }
+
+        let duration_ms = request_start.elapsed().as_millis() as u64;
+        let (mut input_tokens, output_tokens, cached_tokens) =
+            if let Some(usage_ref) = &translation_state.usage {
+                (
+                    extract_input_tokens(usage_ref),
+                    extract_output_tokens(usage_ref),
+                    extract_cached_tokens(usage_ref),
+                )
+            } else {
+                (None, None, None)
+            };
+        // [FIX] 上游未返回 usage 时按请求体估算输入 token，与 HTTP 路径的兜底一致
+        if input_tokens.is_none() {
+            input_tokens = estimate_input_tokens_fallback(openai_body_str.as_deref());
+        }
+
+        let success_log = ProxyRequestLog {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            method: "WS".to_string(),
+            url: "/v1/responses".to_string(),
+            status: 200,
+            duration: duration_ms,
+            model: requested_model.clone(),
+            mapped_model: mapped_model.clone(),
+            account_email: account_email.clone(),
+            client_ip: client_ip.clone(),
+            error: None,
+            request_body: openai_body_str.clone(),
+            response_body: Some(completed_output.to_string()),
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            protocol: Some("openai".to_string()),
+            username: user_token_identity.as_ref().map(|i| i.username.clone()),
+        };
+
+        record_user_token_usage(&user_token_identity, &success_log, user_agent.clone());
+        let _ = state.monitor.log_request(success_log).await;
 
         session_state.last_response_output =
             into_history_without_inline_media(completed_output).unwrap_or_else(|| json!([]));
@@ -6004,8 +6187,23 @@ fn pong_response_for_ping(message: &Message) -> Option<Message> {
 
 #[cfg(test)]
 mod websocket_session_tests {
-    use super::{build_ws_created_event, build_ws_error_event, pong_response_for_ping};
+    use super::{
+        build_ws_created_event, build_ws_error_event, estimate_input_tokens_fallback,
+        pong_response_for_ping,
+    };
     use axum::extract::ws::Message;
+
+    #[test]
+    fn estimate_fallback_returns_none_when_no_body() {
+        assert!(estimate_input_tokens_fallback(None).is_none());
+        assert!(estimate_input_tokens_fallback(Some("")).is_none());
+    }
+
+    #[test]
+    fn estimate_fallback_returns_positive_for_valid_payload() {
+        let payload = r#"{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hello world"}]}"#;
+        assert!(estimate_input_tokens_fallback(Some(payload)).is_some_and(|e| e > 0));
+    }
 
     #[test]
     fn ping_gets_matching_pong() {
@@ -6661,6 +6859,7 @@ struct TranslationState {
     accumulated_text: String,
     tool_calls: std::collections::HashMap<u32, (String, String, String, String)>,
     tool_calls_added: std::collections::HashSet<u32>,
+    usage: Option<Value>,
 }
 
 /// 构造 Responses WebSocket 的 `response.created` 首帧。独立为纯函数便于单测，
@@ -6696,17 +6895,23 @@ fn build_ws_error_event(status: u16, err_type: &str, message: String) -> Value {
     })
 }
 
-async fn send_ws_event(socket: &mut WebSocket, ws_events: &mut Vec<Value>, event: &Value) {
+/// 发送单个 WS 事件。返回 false 表示客户端已断开（send 失败），
+/// 调用方应立即终止上游流，避免 zombie stream 白烧上游 token。
+async fn send_ws_event(socket: &mut WebSocket, ws_events: &mut Vec<Value>, event: &Value) -> bool {
     ws_events.push(event.clone());
-    let _ = socket.send(Message::Text(event.to_string())).await;
+    socket.send(Message::Text(event.to_string())).await.is_ok()
 }
 
+/// 翻译上游 SSE chunk 为 WS 事件。返回 false 表示客户端断开，应停止继续拉取上游。
 async fn translate_openai_chunk_to_ws(
     chunk: &Value,
     state: &mut TranslationState,
     socket: &mut WebSocket,
     ws_events: &mut Vec<Value>,
-) {
+) -> bool {
+    if let Some(usage_val) = chunk.get("usage") {
+        state.usage = Some(usage_val.clone());
+    }
     if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
         for choice in choices {
             if let Some(delta) = choice.get("delta") {
@@ -6729,7 +6934,9 @@ async fn translate_openai_chunk_to_ws(
                             "summary_index": 0,
                             "delta": reasoning
                         });
-                        send_ws_event(socket, ws_events, &reasoning_ev).await;
+                        if !send_ws_event(socket, ws_events, &reasoning_ev).await {
+                            return false;
+                        }
 
                         if !state.message_item_added {
                             let item_added = json!({
@@ -6744,7 +6951,9 @@ async fn translate_openai_chunk_to_ws(
                                     "content": []
                                 }
                             });
-                            send_ws_event(socket, ws_events, &item_added).await;
+                            if !send_ws_event(socket, ws_events, &item_added).await {
+                                return false;
+                            }
 
                             let part_added = json!({
                                 "type": "response.content_part.added",
@@ -6756,7 +6965,9 @@ async fn translate_openai_chunk_to_ws(
                                     "text": ""
                                 }
                             });
-                            send_ws_event(socket, ws_events, &part_added).await;
+                            if !send_ws_event(socket, ws_events, &part_added).await {
+                                return false;
+                            }
                             state.message_item_added = true;
                             state.content_part_added = true;
                         }
@@ -6768,7 +6979,9 @@ async fn translate_openai_chunk_to_ws(
                             "content_index": 0,
                             "delta": reasoning
                         });
-                        send_ws_event(socket, ws_events, &delta_ev).await;
+                        if !send_ws_event(socket, ws_events, &delta_ev).await {
+                            return false;
+                        }
                         state.accumulated_text.push_str(reasoning);
                     }
                 }
@@ -6797,7 +7010,9 @@ async fn translate_openai_chunk_to_ws(
                                     "content": []
                                 }
                             });
-                            send_ws_event(socket, ws_events, &item_added).await;
+                            if !send_ws_event(socket, ws_events, &item_added).await {
+                                return false;
+                            }
 
                             let part_added = json!({
                                 "type": "response.content_part.added",
@@ -6809,7 +7024,9 @@ async fn translate_openai_chunk_to_ws(
                                     "text": ""
                                 }
                             });
-                            send_ws_event(socket, ws_events, &part_added).await;
+                            if !send_ws_event(socket, ws_events, &part_added).await {
+                                return false;
+                            }
                             state.message_item_added = true;
                             state.content_part_added = true;
                         }
@@ -6821,7 +7038,9 @@ async fn translate_openai_chunk_to_ws(
                             "content_index": 0,
                             "delta": content
                         });
-                        send_ws_event(socket, ws_events, &delta_ev).await;
+                        if !send_ws_event(socket, ws_events, &delta_ev).await {
+                            return false;
+                        }
                         state.accumulated_text.push_str(content);
                     }
                 }
@@ -6896,7 +7115,9 @@ async fn translate_openai_chunk_to_ws(
                                     "output_index": tool_output_index,
                                     "item": item_obj
                                 });
-                                send_ws_event(socket, ws_events, &tool_added).await;
+                                if !send_ws_event(socket, ws_events, &tool_added).await {
+                                    return false;
+                                }
                                 state.tool_calls_added.insert(tc_idx);
                             }
 
@@ -6907,7 +7128,9 @@ async fn translate_openai_chunk_to_ws(
                                     "output_index": tool_output_index,
                                     "delta": tc_args
                                 });
-                                send_ws_event(socket, ws_events, &args_delta).await;
+                                if !send_ws_event(socket, ws_events, &args_delta).await {
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -6915,6 +7138,7 @@ async fn translate_openai_chunk_to_ws(
             }
         }
     }
+    true
 }
 
 async fn finalize_ws_events(
@@ -6922,7 +7146,7 @@ async fn finalize_ws_events(
     socket: &mut WebSocket,
     session_state: &mut WebsocketSessionState,
     ws_events: &mut Vec<Value>,
-) -> Value {
+) -> (Value, bool) {
     let mut output_items = Vec::new();
     let mut tool_keys: Vec<u32> = state.tool_calls.keys().cloned().collect();
     tool_keys.sort();
@@ -6944,7 +7168,9 @@ async fn finalize_ws_events(
                 "output_index": tool_output_index,
                 "arguments": args
             });
-            send_ws_event(socket, ws_events, &args_done).await;
+            if !send_ws_event(socket, ws_events, &args_done).await {
+                return (json!(output_items), false);
+            }
 
             let (actual_name, namespace) = split_namespace_tool_name(name);
             let mut item_obj = serde_json::json!({
@@ -6964,7 +7190,9 @@ async fn finalize_ws_events(
                 "output_index": tool_output_index,
                 "item": item_obj
             });
-            send_ws_event(socket, ws_events, &tool_done).await;
+            if !send_ws_event(socket, ws_events, &tool_done).await {
+                return (json!(output_items), false);
+            }
 
             let tc_val = item_obj.clone();
 
@@ -6985,7 +7213,9 @@ async fn finalize_ws_events(
             "content_index": 0,
             "text": &state.accumulated_text
         });
-        send_ws_event(socket, ws_events, &text_done).await;
+        if !send_ws_event(socket, ws_events, &text_done).await {
+            return (json!(output_items), false);
+        }
 
         let part_done = json!({
             "type": "response.content_part.done",
@@ -6997,7 +7227,9 @@ async fn finalize_ws_events(
                 "text": &state.accumulated_text
             }
         });
-        send_ws_event(socket, ws_events, &part_done).await;
+        if !send_ws_event(socket, ws_events, &part_done).await {
+            return (json!(output_items), false);
+        }
 
         let message_done = json!({
             "type": "response.output_item.done",
@@ -7014,7 +7246,9 @@ async fn finalize_ws_events(
                 }]
             }
         });
-        send_ws_event(socket, ws_events, &message_done).await;
+        if !send_ws_event(socket, ws_events, &message_done).await {
+            return (json!(output_items), false);
+        }
 
         output_items.push(json!({
             "id": &state.item_id,
@@ -7038,9 +7272,12 @@ async fn finalize_ws_events(
             "output": output_items
         }
     });
-    send_ws_event(socket, ws_events, &completed_ev).await;
+    if !send_ws_event(socket, ws_events, &completed_ev).await {
+        // output_items 已被 completed_ev 借用，客户端也已断开，直接返回空输出
+        return (Value::Array(Vec::new()), false);
+    }
 
-    json!(output_items)
+    (json!(output_items), true)
 }
 
 fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {

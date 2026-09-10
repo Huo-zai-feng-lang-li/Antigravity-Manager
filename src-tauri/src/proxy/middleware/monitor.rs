@@ -264,7 +264,7 @@ fn summarize_image_json_response(json: &Value) -> Option<String> {
 }
 
 /// Helper function to record User Token usage
-fn record_user_token_usage(
+pub(crate) fn record_user_token_usage(
     user_token_identity: &Option<UserTokenIdentity>,
     log: &ProxyRequestLog,
     user_agent: Option<String>,
@@ -282,7 +282,7 @@ fn record_user_token_usage(
     }
 }
 
-fn extract_cached_tokens(usage: &Value) -> Option<u32> {
+pub(crate) fn extract_cached_tokens(usage: &Value) -> Option<u32> {
     usage
         .get("cache_read_input_tokens")
         .or_else(|| usage.get("total_cached_tokens"))
@@ -305,7 +305,7 @@ fn value_as_u32(value: Option<&Value>) -> Option<u32> {
     value.and_then(|v| v.as_u64()).map(|v| v as u32)
 }
 
-fn extract_input_tokens(usage: &Value) -> Option<u32> {
+pub(crate) fn extract_input_tokens(usage: &Value) -> Option<u32> {
     value_as_u32(
         usage
             .get("prompt_tokens")
@@ -335,7 +335,7 @@ fn extract_reasoning_tokens(usage: &Value) -> Option<u32> {
     )
 }
 
-fn extract_output_tokens(usage: &Value) -> Option<u32> {
+pub(crate) fn extract_output_tokens(usage: &Value) -> Option<u32> {
     if let Some(tokens) = value_as_u32(
         usage
             .get("completion_tokens")
@@ -1044,6 +1044,13 @@ pub async fn monitor_middleware(
             }
         }
     } else {
+        // [FIX] WebSocket 协议握手升级响应 (101 Switching Protocols) 只是连接握手，
+        // 并不代表真实的 LLM 请求或交互。真实流量由 WebSocket 会话内部精确统计并上报。
+        // 此处跳过记录，避免在流量日志中产生无意义、全空的 101 占位记录。
+        if response.status() == axum::http::StatusCode::SWITCHING_PROTOCOLS {
+            return response;
+        }
+
         log.response_body = Some(format!("[{}]", content_type));
 
         // Record User Token Usage

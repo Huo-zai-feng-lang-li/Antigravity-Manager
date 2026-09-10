@@ -181,7 +181,7 @@ impl ProxyMonitor {
         {
             let mut stats = self.stats.write().await;
             stats.total_requests += 1;
-            if log.status >= 200 && log.status < 400 {
+            if log.status < 400 {
                 stats.success_count += 1;
             } else {
                 stats.error_count += 1;

@@ -131,7 +131,7 @@ export const IpAccessLogs: React.FC<Props> = ({ refreshKey }) => {
                                             <AlertTriangle size={10} /> {t('security.logs.blocked')}
                                         </span>
                                     ) : (
-                                        <span className={`badge badge-xs text-white border-none ${log.status && log.status >= 200 && log.status < 400 ? 'badge-success' : 'badge-warning'}`}>
+                                        <span className={`badge badge-xs text-white border-none ${log.status && log.status < 400 ? 'badge-success' : 'badge-warning'}`}>
                                             {log.status || '-'}
                                         </span>
                                     )}

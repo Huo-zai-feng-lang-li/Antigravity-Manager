@@ -289,7 +289,7 @@ export default function MiniView() {
                             animate={{ opacity: 1, y: 0 }}
                             className="flex items-center w-full gap-2"
                         >
-                            <span title={latestLog.status.toString()} className={`w-1.5 h-1.5 rounded-full ${latestLog.status >= 200 && latestLog.status < 400 ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                            <span title={latestLog.status.toString()} className={`w-1.5 h-1.5 rounded-full ${latestLog.status < 400 ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
                             <span className="font-bold truncate max-w-[100px]" title={latestLog.model}>
                                 {latestLog.mapped_model || latestLog.model}
                             </span>

@@ -199,8 +199,8 @@ pub fn get_stats() -> Result<crate::proxy::monitor::ProxyStats, String> {
         .query_row(
             "SELECT
             COUNT(*) as total,
-            COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 1 ELSE 0 END), 0) as success,
-            COALESCE(SUM(CASE WHEN status < 200 OR status >= 400 THEN 1 ELSE 0 END), 0) as error
+            COALESCE(SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END), 0) as success,
+            COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) as error
          FROM request_logs",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

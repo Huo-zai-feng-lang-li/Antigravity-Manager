@@ -81,7 +81,7 @@ const LogTable: React.FC<LogTableProps> = ({
                             onClick={() => onLogClick(log)}
                         >
                             <td style={{ width: '60px' }}>
-                                <span className={`badge badge-xs text-white border-none ${log.status >= 200 && log.status < 400 ? 'badge-success' : 'badge-error'}`}>
+                                <span className={`badge badge-xs text-white border-none ${log.status < 400 ? 'badge-success' : 'badge-error'}`}>
                                     {log.status}
                                 </span>
                             </td>
@@ -582,7 +582,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                         <div className="px-4 py-3 border-b border-gray-100 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200">
                             <div className="flex items-center gap-3">
                                 {loadingDetail && <div className="loading loading-spinner loading-sm"></div>}
-                                <span className={`badge badge-sm text-white border-none ${selectedLog.status >= 200 && selectedLog.status < 400 ? 'badge-success' : 'badge-error'}`}>{selectedLog.status}</span>
+                                <span className={`badge badge-sm text-white border-none ${selectedLog.status < 400 ? 'badge-success' : 'badge-error'}`}>{selectedLog.status}</span>
                                 <span className="font-mono font-bold text-gray-900 dark:text-base-content text-sm">{selectedLog.method}</span>
                                 <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-md hidden sm:inline">{selectedLog.url}</span>
                             </div>

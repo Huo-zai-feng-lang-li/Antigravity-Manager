@@ -476,10 +476,7 @@ mod retry_after_tests {
             extract_retry_after_seconds("Token error: All accounts limited. Wait 5s."),
             Some(5)
         );
-        assert_eq!(
-            extract_retry_after_seconds("Token pool is empty"),
-            None
-        );
+        assert_eq!(extract_retry_after_seconds("Token pool is empty"), None);
         assert_eq!(
             extract_retry_after_seconds("All accounts failed or unhealthy."),
             None
@@ -501,10 +498,7 @@ mod retry_after_tests {
             headers.get("x-account-email").unwrap().to_str().unwrap(),
             "test@example.com"
         );
-        assert_eq!(
-            headers.get("retry-after").unwrap().to_str().unwrap(),
-            "45"
-        );
+        assert_eq!(headers.get("retry-after").unwrap().to_str().unwrap(), "45");
 
         let headers_no_wait = build_token_error_headers(
             Some("gemini-2.5-pro"),
@@ -513,9 +507,12 @@ mod retry_after_tests {
         );
         assert!(headers_no_wait.get("retry-after").is_none());
         assert_eq!(
-            headers_no_wait.get("x-mapped-model").unwrap().to_str().unwrap(),
+            headers_no_wait
+                .get("x-mapped-model")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "gemini-2.5-pro"
         );
     }
 }
-

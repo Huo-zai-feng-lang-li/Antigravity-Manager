@@ -1682,9 +1682,13 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
                 }
 
                 for std_id in &config.quota_protection.monitored_models {
-                    let lookup_key = crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
-                        .unwrap_or_else(|| std_id.clone());
-                    let max_pct = group_max_percentage.get(&lookup_key).cloned().unwrap_or(100);
+                    let lookup_key =
+                        crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
+                            .unwrap_or_else(|| std_id.clone());
+                    let max_pct = group_max_percentage
+                        .get(&lookup_key)
+                        .cloned()
+                        .unwrap_or(100);
 
                     if max_pct < threshold {
                         if !account.protected_models.contains(&lookup_key) {

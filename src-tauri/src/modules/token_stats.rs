@@ -803,8 +803,12 @@ mod tests {
         let now = chrono::Local::now();
         let old_ts = (now - chrono::Duration::days(40)).timestamp();
         let fresh_ts = (now - chrono::Duration::days(1)).timestamp();
-        let old_bucket = (now - chrono::Duration::days(40)).format("%Y-%m-%d %H:00").to_string();
-        let fresh_bucket = (now - chrono::Duration::days(1)).format("%Y-%m-%d %H:00").to_string();
+        let old_bucket = (now - chrono::Duration::days(40))
+            .format("%Y-%m-%d %H:00")
+            .to_string();
+        let fresh_bucket = (now - chrono::Duration::days(1))
+            .format("%Y-%m-%d %H:00")
+            .to_string();
 
         // 明细：1 条 40 天前 + 1 条 1 天前
         conn.execute(
@@ -830,12 +834,16 @@ mod tests {
             .unwrap();
         assert_eq!(remaining_usage, 1);
         let remaining_hourly: u32 = conn
-            .query_row("SELECT COUNT(*) FROM token_stats_hourly", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM token_stats_hourly", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(remaining_hourly, 1);
 
         let survivor_email: String = conn
-            .query_row("SELECT account_email FROM token_usage", [], |row| row.get(0))
+            .query_row("SELECT account_email FROM token_usage", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(survivor_email, "fresh@example.com");
     }

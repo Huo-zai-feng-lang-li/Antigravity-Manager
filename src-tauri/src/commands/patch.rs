@@ -20,6 +20,15 @@ pub async fn patch_agy_binary(file_path: String) -> Result<String, String> {
 
     let data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
     let n = data.len();
+    // [FIX] 防御 usize 下溢：下方模式扫描使用 `n - 25` / `n - 20`，若选中的文件不足 25
+    // 字节（损坏/误选的文件），usize 下溢会变成极大值，随后 data[i..i+7] 立即越界 panic。
+    // 正常 Antigravity 二进制为数十 MB，不受影响；异常小文件在这里返回友好错误。
+    if n < 25 {
+        return Err(format!(
+            "文件过小（{} 字节），不是有效的 Antigravity 二进制程序",
+            n
+        ));
+    }
     let mut patch_offset = None;
     let mut new_inst_bytes = None;
     let mut is_pe_x64 = false;

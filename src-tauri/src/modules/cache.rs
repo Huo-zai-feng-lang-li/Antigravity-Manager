@@ -19,6 +19,20 @@ pub struct ClearResult {
     pub errors: Vec<String>,
 }
 
+/// Chromium/Electron 系应用公认的「纯缓存」子目录名。
+/// 这些目录只保存可随时重建的缓存（HTTP 缓存、JS 字节码、GPU/着色器缓存、blob 临时数据），
+/// 不包含登录凭据/OAuth token/用户配置，删除后应用下次启动会自动重建，因此清理是安全的。
+/// 注意：数据/配置根目录（如 `Google/Antigravity`、`~/.antigravity`）绝不能整体删除，
+/// 那里可能存放 OAuth 登录态与设备凭据，整删会导致 IDE 掉登录（Authentication Required）。
+const CACHE_SUBDIR_NAMES: &[&str] = &[
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "blob_storage",
+];
+
 /// Get all known Antigravity cache paths for the current platform
 pub fn get_antigravity_cache_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -33,9 +47,13 @@ pub fn get_antigravity_cache_paths() -> Vec<PathBuf> {
             // Application caches
             paths.push(home.join("Library/Caches/com.google.antigravity"));
 
-            // Alternative cache locations that may exist
-            paths.push(home.join(".antigravity"));
-            paths.push(home.join(".config/antigravity"));
+            // [FIX] 不再整删 ~/.antigravity / ~/.config/antigravity 这类数据/配置根
+            // （内含扩展、登录态等），只清理其下的纯缓存子目录，避免掉登录。
+            for data_root in [home.join(".antigravity"), home.join(".config/antigravity")] {
+                for sub in CACHE_SUBDIR_NAMES {
+                    paths.push(data_root.join(sub));
+                }
+            }
         }
     }
 
@@ -44,18 +62,25 @@ pub fn get_antigravity_cache_paths() -> Vec<PathBuf> {
         // LocalAppData cache
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             let local_path = PathBuf::from(&local_app_data);
-            paths.push(local_path.join("Google\\Antigravity"));
-            paths.push(local_path.join("Antigravity\\Cache"));
+            // [FIX] `Google\Antigravity` 是原生组件的数据根目录，内含 OAuth 登录态/设备
+            // 凭据，绝不能整体 remove_dir_all（曾因此导致 IDE 登录态丢失、卡在
+            // Authentication Required）。改为只清理其下公认的纯缓存子目录。
+            let google_antigravity = local_path.join("Google").join("Antigravity");
+            for sub in CACHE_SUBDIR_NAMES {
+                paths.push(google_antigravity.join(sub));
+            }
+            // Electron userData 下路径已精确到 Cache 子目录，本身安全
+            paths.push(local_path.join("Antigravity").join("Cache"));
             // Standalone Antigravity IDE cache (Electron-based)
-            paths.push(local_path.join("Antigravity IDE\\Cache"));
+            paths.push(local_path.join("Antigravity IDE").join("Cache"));
         }
 
         // AppData cache
         if let Ok(app_data) = std::env::var("APPDATA") {
             let app_path = PathBuf::from(&app_data);
-            paths.push(app_path.join("Antigravity\\Cache"));
+            paths.push(app_path.join("Antigravity").join("Cache"));
             // Standalone Antigravity IDE cache (Electron-based)
-            paths.push(app_path.join("Antigravity IDE\\Cache"));
+            paths.push(app_path.join("Antigravity IDE").join("Cache"));
         }
     }
 
@@ -66,8 +91,11 @@ pub fn get_antigravity_cache_paths() -> Vec<PathBuf> {
             paths.push(home.join(".cache/Antigravity"));
             paths.push(home.join(".cache/google-antigravity"));
 
-            // Alternative locations
-            paths.push(home.join(".antigravity"));
+            // [FIX] ~/.antigravity 是数据/配置根，不整删，只清其下纯缓存子目录
+            let data_root = home.join(".antigravity");
+            for sub in CACHE_SUBDIR_NAMES {
+                paths.push(data_root.join(sub));
+            }
         }
 
         // XDG_CACHE_HOME if set
@@ -216,5 +244,47 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("cleared_paths"));
         assert!(json.contains("total_size_freed"));
+    }
+
+    /// 回归测试：清理缓存绝不能把「数据/认证根目录」整体删除。
+    /// 历史 bug：Windows 下整删 `Google/Antigravity`、mac/linux 下整删 `~/.antigravity`
+    /// 与 `~/.config/antigravity`，而这些目录存放 OAuth 登录态/设备凭据，整删会导致
+    /// IDE 掉登录（Authentication Required）。修复后只允许下钻到公认缓存子目录。
+    #[test]
+    fn test_cache_paths_never_delete_data_root() {
+        let paths = get_antigravity_cache_paths();
+        assert!(!paths.is_empty(), "应至少返回一个缓存路径");
+        for p in &paths {
+            let comps: Vec<String> = p
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+                .collect();
+            let last = comps.last().map(|s| s.as_str()).unwrap_or("");
+            let parent = if comps.len() >= 2 {
+                comps[comps.len() - 2].as_str()
+            } else {
+                ""
+            };
+
+            // 绝不能是家目录数据根 ~/.antigravity
+            assert_ne!(
+                last,
+                ".antigravity",
+                "不得整体删除数据根 ~/.antigravity: {}",
+                p.display()
+            );
+            // 绝不能是 Windows 数据根 Google/Antigravity
+            assert!(
+                !(parent == "google" && last == "antigravity"),
+                "不得整体删除 Google/Antigravity 数据根（含登录态）: {}",
+                p.display()
+            );
+            // 绝不能是 ~/.config/antigravity 配置根
+            assert!(
+                !(parent == ".config" && last == "antigravity"),
+                "不得整体删除 .config/antigravity 配置根: {}",
+                p.display()
+            );
+        }
     }
 }

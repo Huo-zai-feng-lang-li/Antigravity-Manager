@@ -144,6 +144,13 @@ impl CloudflaredManager {
         self.status.read().await.clone()
     }
 
+    /// 本管理器当前是否持有正在运行的 cloudflared 子进程。
+    /// 用于区分「本程序启动的隧道」与「上次异常退出残留的孤儿进程」，
+    /// 避免启动/重启反代服务时误杀正在运行的隧道。
+    pub async fn is_process_running(&self) -> bool {
+        self.process.read().await.is_some()
+    }
+
     /// 更新状态
     async fn update_status(&self, f: impl FnOnce(&mut CloudflaredStatus)) {
         let mut status = self.status.write().await;

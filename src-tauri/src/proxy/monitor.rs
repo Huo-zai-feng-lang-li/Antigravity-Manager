@@ -158,11 +158,13 @@ impl ProxyMonitor {
     }
 
     pub async fn log_request(&self, log: ProxyRequestLog) {
-        if let (Some(account), Some(input), Some(output)) =
-            (&log.account_email, log.input_tokens, log.output_tokens)
-        {
+        // [FIX] 放宽守卫：只要 account + input 有值就入账，output 缺省按 0。
+        // 上游未返回 usage 元数据时（如流中断、错误流），至少把已确定的输入消耗
+        // 统计入库，避免整笔请求的 Token 用量静默丢失。
+        if let (Some(account), Some(input)) = (&log.account_email, log.input_tokens) {
             let model = log.model.clone().unwrap_or_else(|| "unknown".to_string());
             let account = account.clone();
+            let output = log.output_tokens.unwrap_or(0);
             let cached = log.cached_tokens.unwrap_or(0);
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = crate::modules::token_stats::record_usage(

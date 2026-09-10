@@ -6084,7 +6084,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             }
         }
 
-        let (completed_output, _finalized_ok) = finalize_ws_events(
+        let (completed_output, finalized_ok) = finalize_ws_events(
             &mut translation_state,
             &mut socket,
             &mut session_state,
@@ -6124,20 +6124,31 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             input_tokens = estimate_input_tokens_fallback(openai_body_str.as_deref());
         }
 
+        // [FIX] 客户端断开（finalized_ok=false）时标记 499 Client Closed Request，
+        // 避免监控把中断误记为 200 OK 空响应；且不覆盖已确认完结的会话上下文，
+        // 防止网络抖动后多轮对话上文记忆断层。
         let success_log = ProxyRequestLog {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             method: "WS".to_string(),
             url: "/v1/responses".to_string(),
-            status: 200,
+            status: if finalized_ok { 200 } else { 499 },
             duration: duration_ms,
             model: requested_model.clone(),
             mapped_model: mapped_model.clone(),
             account_email: account_email.clone(),
             client_ip: client_ip.clone(),
-            error: None,
+            error: if finalized_ok {
+                None
+            } else {
+                Some("client closed request during stream".to_string())
+            },
             request_body: openai_body_str.clone(),
-            response_body: Some(completed_output.to_string()),
+            response_body: if state.monitor.is_enabled() {
+                Some(completed_output.to_string())
+            } else {
+                None
+            },
             input_tokens,
             output_tokens,
             cached_tokens,
@@ -6148,14 +6159,16 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         record_user_token_usage(&user_token_identity, &success_log, user_agent.clone());
         let _ = state.monitor.log_request(success_log).await;
 
-        session_state.last_response_output =
-            into_history_without_inline_media(completed_output).unwrap_or_else(|| json!([]));
-        session_state.last_response_id = translation_state.response_id.clone();
-        session_state.last_response_pending_tool_call_ids = translation_state
-            .tool_calls
-            .values()
-            .map(|(_, call_id, _, _)| call_id.clone())
-            .collect();
+        if finalized_ok {
+            session_state.last_response_output =
+                into_history_without_inline_media(completed_output).unwrap_or_else(|| json!([]));
+            session_state.last_response_id = translation_state.response_id.clone();
+            session_state.last_response_pending_tool_call_ids = translation_state
+                .tool_calls
+                .values()
+                .map(|(_, call_id, _, _)| call_id.clone())
+                .collect();
+        }
     }
 
     // Always finish the closing handshake so neither side is left with a

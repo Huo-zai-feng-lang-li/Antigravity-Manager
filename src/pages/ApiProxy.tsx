@@ -206,7 +206,6 @@ export default function ApiProxy() {
     const [cfLoading, setCfLoading] = useState(false);
     const [cfMode, setCfMode] = useState<'quick' | 'auth'>('quick');
     const [cfToken, setCfToken] = useState('');
-    const [cfCustomDomain, setCfCustomDomain] = useState('');
     const [cfUseHttp2, setCfUseHttp2] = useState(true); // 默认启用HTTP/2，更稳定
 
     const zaiModelOptions = useMemo(() => {
@@ -311,7 +310,7 @@ export default function ApiProxy() {
                     port: appConfig?.proxy.port || 8045,
                     token: cfMode === 'auth' ? cfToken : null,
                     use_http2: cfUseHttp2,
-                    custom_domain: cfMode === 'auth' ? (cfCustomDomain.trim() || null) : null,
+                    custom_domain: appConfig?.cloudflared?.custom_domain,
                 };
                 const status = await invoke<typeof cfStatus>('cloudflared_start', { config });
                 setCfStatus(status);
@@ -327,7 +326,7 @@ export default function ApiProxy() {
                             mode: cfMode,
                             token: cfToken,
                             use_http2: cfUseHttp2,
-                            custom_domain: cfCustomDomain.trim(),
+                            custom_domain: appConfig.cloudflared?.custom_domain,
                             port: appConfig.proxy.port || 8045
                         }
                     };
@@ -430,7 +429,6 @@ export default function ApiProxy() {
             if (config.cloudflared) {
                 setCfMode(config.cloudflared.mode || 'quick');
                 setCfToken(config.cloudflared.token || '');
-                setCfCustomDomain(config.cloudflared.custom_domain || '');
                 setCfUseHttp2(config.cloudflared.use_http2 !== false); // 默认开启 HTTP/2
             }
         } catch (error) {
@@ -2163,29 +2161,6 @@ print(response.choices[0].message.content)`;
                                                 {/* 域名和Token输入 (仅auth模式) */}
                                                 {cfMode === 'auth' && (
                                                     <div className="space-y-3">
-                                                        <div className="space-y-1.5">
-                                                            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center justify-between">
-                                                                <span>{t('proxy.cloudflared.custom_domain', { defaultValue: '自定义域名 (Custom Domain)' })}</span>
-                                                                <span className="text-[10px] text-gray-400">已绑定 Cloudflare 的公网域名</span>
-                                                            </label>
-                                                            <input
-                                                                type="text"
-                                                                value={cfCustomDomain}
-                                                                onChange={(e) => setCfCustomDomain(e.target.value)}
-                                                                onBlur={() => {
-                                                                    if (appConfig) {
-                                                                        saveConfig({
-                                                                            ...appConfig,
-                                                                            cloudflared: { ...appConfig.cloudflared, custom_domain: cfCustomDomain.trim() }
-                                                                        });
-                                                                    }
-                                                                }}
-                                                                disabled={cfStatus.running}
-                                                                placeholder="例如: gateway.example.com"
-                                                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-base-200 text-sm font-mono disabled:opacity-60"
-                                                            />
-                                                        </div>
-
                                                         <div className="space-y-1.5">
                                                             <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                                                                 {t('proxy.cloudflared.token', { defaultValue: 'Tunnel Token' })}

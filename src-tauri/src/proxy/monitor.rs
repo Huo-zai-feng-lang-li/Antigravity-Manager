@@ -75,16 +75,18 @@ impl ProxyMonitor {
                     let app_logs = crate::modules::logger::cleanup_old_logs(7);
                     let db_by_age = crate::modules::proxy_db::cleanup_old_logs(30);
                     let db_by_cap = crate::modules::proxy_db::limit_max_logs(2000);
-                    (app_logs, db_by_age, db_by_cap)
+                    let token_stats = crate::modules::token_stats::cleanup_old_records(30);
+                    (app_logs, db_by_age, db_by_cap, token_stats)
                 })
                 .await;
                 match result {
-                    Ok((app_logs, db_by_age, db_by_cap)) => {
+                    Ok((app_logs, db_by_age, db_by_cap, token_stats)) => {
                         tracing::info!(
-                            "Periodic maintenance done: app_logs={:?}, db_by_age={:?}, db_by_cap={:?}",
+                            "Periodic maintenance done: app_logs={:?}, db_by_age={:?}, db_by_cap={:?}, token_stats={:?}",
                             app_logs,
                             db_by_age,
-                            db_by_cap
+                            db_by_cap,
+                            token_stats
                         );
                     }
                     Err(e) => {

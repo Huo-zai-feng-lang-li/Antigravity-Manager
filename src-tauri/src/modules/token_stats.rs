@@ -237,6 +237,34 @@ fn record_usage_in_connection(
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// 清理 N 天前的 token 统计（明细 + 小时聚合），防止长期运行数据库无限增长。
+/// 前端最大查询范围是近 7 天（168h），保留 30 天完全覆盖且留有余量。
+/// 返回 (删除的明细行数, 删除的聚合行数)。
+pub fn cleanup_old_records(days: i64) -> Result<(usize, usize), String> {
+    let conn = connect_db()?;
+    cleanup_old_records_in_connection(&conn, days)
+}
+
+fn cleanup_old_records_in_connection(
+    conn: &Connection,
+    days: i64,
+) -> Result<(usize, usize), String> {
+    let cutoff_ts = chrono::Local::now().timestamp() - days * 86400;
+    let cutoff_bucket = (chrono::Local::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d %H:00")
+        .to_string();
+    let deleted_usage = conn
+        .execute("DELETE FROM token_usage WHERE timestamp < ?1", [&cutoff_ts])
+        .map_err(|e| e.to_string())?;
+    let deleted_hourly = conn
+        .execute(
+            "DELETE FROM token_stats_hourly WHERE hour_bucket < ?1",
+            [&cutoff_bucket],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((deleted_usage, deleted_hourly))
+}
+
 /// Get hourly aggregated stats for a time range
 pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String> {
     let conn = connect_db()?;
@@ -765,5 +793,50 @@ mod tests {
         assert!(indexes.contains(&"idx_token_account".to_string()));
         assert!(indexes.contains(&"idx_token_timestamp_model".to_string()));
         assert!(indexes.contains(&"idx_token_timestamp_account".to_string()));
+    }
+
+    #[test]
+    fn test_cleanup_removes_only_records_older_than_days() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db_in_connection(&conn).unwrap();
+
+        let now = chrono::Local::now();
+        let old_ts = (now - chrono::Duration::days(40)).timestamp();
+        let fresh_ts = (now - chrono::Duration::days(1)).timestamp();
+        let old_bucket = (now - chrono::Duration::days(40)).format("%Y-%m-%d %H:00").to_string();
+        let fresh_bucket = (now - chrono::Duration::days(1)).format("%Y-%m-%d %H:00").to_string();
+
+        // 明细：1 条 40 天前 + 1 条 1 天前
+        conn.execute(
+            "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens)
+             VALUES (?1, 'old@example.com', 'm', 1, 1, 0, 2), (?2, 'fresh@example.com', 'm', 1, 1, 0, 2)",
+            params![old_ts, fresh_ts],
+        )
+        .unwrap();
+        // 聚合：1 条 40 天前 + 1 条 1 天前
+        conn.execute(
+            "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_cached_tokens, total_tokens, request_count)
+             VALUES (?1, 'old@example.com', 1, 1, 0, 2, 1), (?2, 'fresh@example.com', 1, 1, 0, 2, 1)",
+            params![old_bucket, fresh_bucket],
+        )
+        .unwrap();
+
+        let (deleted_usage, deleted_hourly) = cleanup_old_records_in_connection(&conn, 30).unwrap();
+        assert_eq!(deleted_usage, 1);
+        assert_eq!(deleted_hourly, 1);
+
+        let remaining_usage: u32 = conn
+            .query_row("SELECT COUNT(*) FROM token_usage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining_usage, 1);
+        let remaining_hourly: u32 = conn
+            .query_row("SELECT COUNT(*) FROM token_stats_hourly", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining_hourly, 1);
+
+        let survivor_email: String = conn
+            .query_row("SELECT account_email FROM token_usage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(survivor_email, "fresh@example.com");
     }
 }

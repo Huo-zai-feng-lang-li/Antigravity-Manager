@@ -492,10 +492,19 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                         </select>
                     </div>
 
-                    <div className="hidden lg:flex gap-4 text-[10px] font-bold uppercase">
-                        <span className="text-blue-500">{formatCompactNumber(stats.total_requests)} {t('monitor.stats.total')}</span>
-                        <span className="text-green-500">{formatCompactNumber(stats.success_count)} {t('monitor.stats.ok')}</span>
-                        <span className="text-red-500">{formatCompactNumber(stats.error_count)} {t('monitor.stats.err')}</span>
+                    <div className="hidden lg:flex items-baseline gap-5">
+                        <span className="flex items-baseline gap-1.5">
+                            <span className="text-lg font-extrabold leading-none tabular-nums text-blue-500">{formatCompactNumber(stats.total_requests)}</span>
+                            <span className="text-xs font-semibold text-gray-500">{t('monitor.stats.total')}</span>
+                        </span>
+                        <span className="flex items-baseline gap-1.5">
+                            <span className="text-lg font-extrabold leading-none tabular-nums text-green-500">{formatCompactNumber(stats.success_count)}</span>
+                            <span className="text-xs font-semibold text-gray-500">{t('monitor.stats.ok')}</span>
+                        </span>
+                        <span className="flex items-baseline gap-1.5">
+                            <span className="text-lg font-extrabold leading-none tabular-nums text-red-500">{formatCompactNumber(stats.error_count)}</span>
+                            <span className="text-xs font-semibold text-gray-500">{t('monitor.stats.err')}</span>
+                        </span>
                     </div>
 
                     <button onClick={() => loadData(currentPage, filter)} className="btn btn-sm btn-ghost text-gray-400" title={t('common.refresh')}>

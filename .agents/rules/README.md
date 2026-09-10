@@ -66,6 +66,7 @@
 ## 4. 交付与验证基线 (Verification Baseline)
 
 1. **改动验证三要素**：
+   - **代码格式统一**：修改 Rust 代码后必须执行 `cargo fmt`，CI 的 `cargo fmt --check` 是硬门槛，格式不统一直接构建失败（三平台全红）。
    - **代码可编译**：`cargo check` / `cargo clippy` 零 Error。
    - **无回归风险**：核心模块变更必须通过现有的 `cargo test`。
    - **真实链路印证**：涉及 API 代理改动，需使用测试脚本或 curl 命令针对 local port 执行端到端流量取证。

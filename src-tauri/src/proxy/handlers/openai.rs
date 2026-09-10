@@ -5777,13 +5777,11 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let payload: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
-                let error_ev = json!({
-                    "type": "error",
-                    "error": {
-                        "message": format!("Invalid JSON: {}", e),
-                        "type": "invalid_request_error"
-                    }
-                });
+                let error_ev = build_ws_error_event(
+                    400,
+                    "invalid_request_error",
+                    format!("Invalid JSON: {}", e),
+                );
                 let _ = socket.send(Message::Text(error_ev.to_string())).await;
                 continue;
             }
@@ -5832,53 +5830,22 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let normalized = match normalize_responses_websocket_request(payload, &mut session_state) {
             Ok(n) => n,
             Err(e) => {
-                let error_ev = json!({
-                    "type": "error",
-                    "error": {
-                        "message": e,
-                        "type": "invalid_request_error"
-                    }
-                });
+                let error_ev = build_ws_error_event(400, "invalid_request_error", e);
                 let _ = socket.send(Message::Text(error_ev.to_string())).await;
                 continue;
             }
         };
 
         let openai_body = convert_codex_to_openai_request(normalized);
-        let response_result =
-            handle_chat_completions(State(state.clone()), headers.clone(), Json(openai_body)).await;
 
-        let response = match response_result {
-            Ok(res) => res.into_response(),
-            Err((status, err_msg)) => {
-                let error_ev = json!({
-                    "type": "error",
-                    "error": {
-                        "message": err_msg,
-                        "type": "server_error",
-                        "code": status.as_u16().to_string()
-                    }
-                });
-                let _ = socket.send(Message::Text(error_ev.to_string())).await;
-                continue;
-            }
-        };
-
-        if !response.status().is_success() {
-            let error_ev = json!({
-                "type": "error",
-                "error": {
-                    "message": format!("Upstream returned status {}", response.status()),
-                    "type": "server_error"
-                }
-            });
-            let _ = socket.send(Message::Text(error_ev.to_string())).await;
-            continue;
-        }
-
-        let body = response.into_body();
-        let mut stream = body.into_data_stream();
-
+        // [FIX] 先分配 response/item id 并“立即”下发 response.created 首帧。
+        // 旧实现要等 handle_chat_completions 内部 peek 到上游首个有效 SSE 块才返回，
+        // 然后才发第一帧；而 reasoning / 高负载 / 经上游代理时首个有效块可能超过
+        // Codex 的 WebSocket 首响应超时（DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS=15s），
+        // 这期间连接上零数据帧，客户端判定 stream disconnected 并重连，重连又重复
+        // 同样的等待，最终 Reconnecting 5/5 后 request timed out（HTTP/curl 走 SSE
+        // 且无此 15s 首帧超时，所以始终正常）。HTTP SSE 路径本就在进入上游循环前
+        // 先 yield created，这里对齐：首帧不依赖上游，后续事件仍随上游流逐个转发。
         let mut translation_state = TranslationState {
             response_id: format!("resp-{}", &Uuid::new_v4().to_string()[..24]),
             item_id: format!("item-{}", &Uuid::new_v4().to_string()[..16]),
@@ -5891,18 +5858,34 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             tool_calls: std::collections::HashMap::new(),
             tool_calls_added: std::collections::HashSet::new(),
         };
-
-        let created_ev = json!({
-            "type": "response.created",
-            "response": {
-                "id": &translation_state.response_id,
-                "object": "response",
-                "status": "in_progress",
-                "output": []
-            }
-        });
+        let created_ev = build_ws_created_event(&translation_state.response_id);
         let mut outgoing_ws_events = Vec::new();
         send_ws_event(&mut socket, &mut outgoing_ws_events, &created_ev).await;
+
+        let response_result =
+            handle_chat_completions(State(state.clone()), headers.clone(), Json(openai_body)).await;
+
+        let response = match response_result {
+            Ok(res) => res.into_response(),
+            Err((status, err_msg)) => {
+                let error_ev = build_ws_error_event(status.as_u16(), "server_error", err_msg);
+                let _ = socket.send(Message::Text(error_ev.to_string())).await;
+                continue;
+            }
+        };
+
+        if !response.status().is_success() {
+            let error_ev = build_ws_error_event(
+                response.status().as_u16(),
+                "server_error",
+                format!("Upstream returned status {}", response.status()),
+            );
+            let _ = socket.send(Message::Text(error_ev.to_string())).await;
+            continue;
+        }
+
+        let body = response.into_body();
+        let mut stream = body.into_data_stream();
 
         let mut buffer = bytes::BytesMut::new();
         while let Some(chunk_res) = stream.next().await {
@@ -6021,7 +6004,7 @@ fn pong_response_for_ping(message: &Message) -> Option<Message> {
 
 #[cfg(test)]
 mod websocket_session_tests {
-    use super::pong_response_for_ping;
+    use super::{build_ws_created_event, build_ws_error_event, pong_response_for_ping};
     use axum::extract::ws::Message;
 
     #[test]
@@ -6037,6 +6020,45 @@ mod websocket_session_tests {
     fn non_ping_messages_have_no_pong() {
         assert!(pong_response_for_ping(&Message::Pong(Vec::new())).is_none());
         assert!(pong_response_for_ping(&Message::Close(None)).is_none());
+    }
+
+    #[test]
+    fn created_event_uses_given_response_id_and_in_progress() {
+        // 首帧必须在等待上游之前就可构造，且与后续事件共用同一 response.id。
+        let ev = build_ws_created_event("resp-abc");
+        assert_eq!(
+            ev.get("type").and_then(|v| v.as_str()),
+            Some("response.created")
+        );
+        let resp = ev.get("response").expect("response object");
+        assert_eq!(resp.get("id").and_then(|v| v.as_str()), Some("resp-abc"));
+        assert_eq!(
+            resp.get("status").and_then(|v| v.as_str()),
+            Some("in_progress")
+        );
+        assert!(resp
+            .get("output")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.is_empty()));
+    }
+
+    #[test]
+    fn error_event_carries_top_level_status_for_codex() {
+        // Codex 仅在错误帧带顶层数值 status(非2xx)时才会终止并重试/回退，
+        // 否则静默跳过直到空闲超时。
+        let ev = build_ws_error_event(400, "invalid_request_error", "bad".to_string());
+        assert_eq!(ev.get("type").and_then(|v| v.as_str()), Some("error"));
+        assert_eq!(ev.get("status").and_then(|v| v.as_u64()), Some(400));
+        let err = ev.get("error").expect("error object");
+        assert_eq!(
+            err.get("type").and_then(|v| v.as_str()),
+            Some("invalid_request_error")
+        );
+        assert_eq!(err.get("message").and_then(|v| v.as_str()), Some("bad"));
+        assert_eq!(err.get("code").and_then(|v| v.as_str()), Some("400"));
+
+        let ev5 = build_ws_error_event(502, "server_error", "x".to_string());
+        assert_eq!(ev5.get("status").and_then(|v| v.as_u64()), Some(502));
     }
 }
 
@@ -6639,6 +6661,39 @@ struct TranslationState {
     accumulated_text: String,
     tool_calls: std::collections::HashMap<u32, (String, String, String, String)>,
     tool_calls_added: std::collections::HashSet<u32>,
+}
+
+/// 构造 Responses WebSocket 的 `response.created` 首帧。独立为纯函数便于单测，
+/// 并保证“连接建立后立即下发的首帧”与后续流式事件复用同一个 `response.id`。
+fn build_ws_created_event(response_id: &str) -> Value {
+    json!({
+        "type": "response.created",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "status": "in_progress",
+            "output": []
+        }
+    })
+}
+
+/// 构造 Responses WebSocket 的错误事件。
+///
+/// Codex（openai/codex `responses_websocket.rs`）只有在错误帧带**顶层数值
+/// `status`** 且非 2xx 时才会把它识别为终止错误（`parse_wrapped_websocket_error_event`
+/// / `map_wrapped_websocket_error_event`）；缺顶层 `status` 时该文本帧会被静默跳过，
+/// 客户端只能一直等到空闲超时。这里在保留 `error.type/message` 的同时补齐顶层
+/// `status`（并带上同义的字符串 `code`）；新增字段对其它 IDE 为可忽略的多余 JSON 字段。
+fn build_ws_error_event(status: u16, err_type: &str, message: String) -> Value {
+    json!({
+        "type": "error",
+        "status": status,
+        "error": {
+            "message": message,
+            "type": err_type,
+            "code": status.to_string()
+        }
+    })
 }
 
 async fn send_ws_event(socket: &mut WebSocket, ws_events: &mut Vec<Value>, event: &Value) {

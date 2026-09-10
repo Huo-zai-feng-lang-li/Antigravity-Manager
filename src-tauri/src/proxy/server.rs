@@ -1629,9 +1629,19 @@ async fn admin_save_config(
     }
 
     // 更新上游代理
+    // [FIX] 与 Tauri 路径 update_proxy 对齐：重建默认 client + 清空 per-proxy 缓存，
+    // 否则 Web/Docker 端改了上游代理后仍复用旧连接，直到重启才生效。
     {
-        let mut proxy = state.upstream_proxy.write().await;
-        *proxy = new_config.clone().proxy.upstream_proxy;
+        let upstream_cfg = new_config.clone().proxy.upstream_proxy;
+        {
+            let mut proxy = state.upstream_proxy.write().await;
+            *proxy = upstream_cfg.clone();
+        }
+        state
+            .upstream
+            .rebuild_default_client(Some(upstream_cfg))
+            .await;
+        state.upstream.clear_client_cache();
     }
 
     // 更新安全策略
@@ -1655,9 +1665,15 @@ async fn admin_save_config(
     }
 
     // 更新代理池配置（Web/Docker 保存配置时热更新）
+    // [FIX] 与 update_proxy_pool 对齐：重新同步账号↔代理绑定并清空缓存 client，使新代理 URL/凭据立即生效。
     {
-        let mut pool = state.proxy_pool_state.write().await;
-        *pool = new_config.clone().proxy.proxy_pool;
+        let pool_cfg = new_config.clone().proxy.proxy_pool;
+        {
+            let mut pool = state.proxy_pool_state.write().await;
+            *pool = pool_cfg;
+        }
+        state.proxy_pool_manager.sync_bindings_from_config().await;
+        state.upstream.clear_client_cache();
     }
 
     Ok(StatusCode::OK)
@@ -3519,7 +3535,14 @@ async fn admin_get_ip_access_logs(
             )
         })?;
 
-    let total = logs.len(); // Simple total
+    // [FIX] 总数用 COUNT(*)（与分页查询同 WHERE），原来用当前页条数导致分页器页数错误
+    let total =
+        security_db::get_ip_access_logs_count(q.search.as_deref(), q.blocked_only).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })? as usize;
 
     Ok(Json(IpAccessLogResponse { logs, total }))
 }

@@ -376,8 +376,15 @@ impl UpstreamClient {
 
         // 2. Device & Session Identity
         // Machine ID (优先使用账号独立绑定的 DeviceProfile，实现多账号指纹隔离，防止关联风控)
-        let resolved_machine_id: Option<String> = account_id
-            .and_then(|id| crate::modules::account::load_account(id).ok())
+        // [FIX] load_account 是同步读盘，原实现每个上游请求都在 async 热路径阻塞 tokio worker；
+        // 移到 spawn_blocking，join 失败时降级为本机 machine_uid（与原 or_else 兜底一致）。
+        let owned_account_id = account_id.map(|id| id.to_string());
+        let loaded_account = tokio::task::spawn_blocking(move || {
+            owned_account_id.and_then(|id| crate::modules::account::load_account(&id).ok())
+        })
+        .await
+        .unwrap_or(None);
+        let resolved_machine_id: Option<String> = loaded_account
             .and_then(|acc| acc.device_profile)
             .map(|dp| {
                 if !dp.mac_machine_id.is_empty() {

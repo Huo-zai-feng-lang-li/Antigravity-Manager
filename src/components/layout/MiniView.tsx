@@ -33,6 +33,8 @@ export default function MiniView() {
     const { t } = useTranslation();
     const [isRefreshing, setIsRefreshing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    // 持有最新刷新函数，避免把易变的 currentAccount/isRefreshing 放进定时器依赖而反复重建定时器
+    const handleRefreshRef = useRef<() => void>(() => {});
     const [appVersion, setAppVersion] = useState('0.0.0');
     const [latestLog, setLatestLog] = useState<ProxyRequestLog | null>(null);
 
@@ -78,20 +80,17 @@ export default function MiniView() {
     }, []);
 
     // Auto-refresh logic based on config
+    // 仅依赖「是否开启/间隔多久」；currentAccount、isRefreshing 经 ref 读最新值，
+    // 否则每次刷新产生的新引用或 isRefreshing 翻转都会 clearInterval 再重建，分钟级定时器走不完一个周期。
     useEffect(() => {
         if (!config?.auto_refresh || !config?.refresh_interval || config.refresh_interval <= 0) return;
 
-        console.log(`[MiniView] Starting auto-refresh timer: ${config.refresh_interval} mins`);
-
         const intervalId = setInterval(() => {
-            if (!isRefreshing && currentAccount) {
-                console.log('[MiniView] Auto-refreshing quota...');
-                handleRefresh();
-            }
+            handleRefreshRef.current();
         }, config.refresh_interval * 60 * 1000);
 
         return () => clearInterval(intervalId);
-    }, [config?.auto_refresh, config?.refresh_interval, currentAccount, isRefreshing]);
+    }, [config?.auto_refresh, config?.refresh_interval]);
 
     // Enter mini mode & Auto-resize based on content
     useEffect(() => {
@@ -121,6 +120,9 @@ export default function MiniView() {
             setTimeout(() => setIsRefreshing(false), 800);
         }
     };
+
+    // 每次渲染刷新 ref，保证定时器回调调用的是最新闭包（守卫与账号均为最新）
+    handleRefreshRef.current = handleRefresh;
 
     const handleMaximize = async () => {
         await exitMiniMode();

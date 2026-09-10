@@ -56,8 +56,9 @@ pub async fn get_ip_access_logs(query: IpAccessLogQuery) -> Result<IpAccessLogRe
         query.blocked_only,
     )?;
 
-    // 简单计算总数 (如果需要精确分页,可以添加 count 函数)
-    let total = logs.len();
+    // [FIX] 总数用 COUNT(*)（与分页查询同 WHERE），原来用当前页条数导致分页器页数错误
+    let total = security_db::get_ip_access_logs_count(query.search.as_deref(), query.blocked_only)?
+        as usize;
 
     Ok(IpAccessLogResponse { logs, total })
 }

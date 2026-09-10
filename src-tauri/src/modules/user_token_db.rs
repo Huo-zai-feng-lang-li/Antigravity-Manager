@@ -71,6 +71,9 @@ pub fn connect_db() -> Result<Connection, String> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "busy_timeout", 5000);
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    // [FIX] SQLite 默认关闭外键约束，必须逐连接开启，否则建表声明的
+    // ON DELETE CASCADE 不生效，删除令牌后 token_ip_bindings/token_usage_logs 会残留。
+    let _ = conn.pragma_update(None, "foreign_keys", "ON");
     Ok(conn)
 }
 
@@ -480,6 +483,20 @@ pub fn delete_token(id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM user_tokens WHERE id = ?1", params![id])
         .map_err(|e| format!("Failed to delete token: {}", e))?;
     Ok(())
+}
+
+/// 清理超过 N 天的令牌用量明细（token_usage_logs 只增，长期运行需有界）。
+/// request_time 为秒级 Unix 时间戳，与写入处 Utc::now().timestamp() 一致。
+pub fn cleanup_old_usage_logs(days: i64) -> Result<usize, String> {
+    let conn = connect_db()?;
+    let cutoff = chrono::Utc::now().timestamp() - days * 24 * 3600;
+    let deleted = conn
+        .execute(
+            "DELETE FROM token_usage_logs WHERE request_time < ?1",
+            [cutoff],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(deleted)
 }
 
 /// 获取令牌的所有 IP 绑定

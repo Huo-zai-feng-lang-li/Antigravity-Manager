@@ -14,6 +14,9 @@ use std::time::Instant;
 
 const MAX_REQUEST_LOG_SIZE: usize = 100 * 1024 * 1024; // 100MB
 const MAX_RESPONSE_LOG_SIZE: usize = 100 * 1024 * 1024; // 100MB for image responses
+
+// 流式(SSE)响应全量日志累积上限：防止超长流无界占用内存，超过后只保留尾部用于 usage 兜底
+const MAX_STREAM_LOG_SIZE: usize = 16 * 1024 * 1024; // 16MB
 const MAX_LOGGED_FIELD_CHARS: usize = 500;
 
 async fn next_chunk_while_receiver_open<S, T>(
@@ -538,7 +541,13 @@ pub async fn monitor_middleware(
 
             while let Some(chunk_res) = next_chunk_while_receiver_open(&mut stream, &tx).await {
                 if let Ok(chunk) = chunk_res {
-                    all_stream_data.extend_from_slice(&chunk);
+                    // [FIX] 全量累积设硬上限，超过后停止累积全量（尾部 last_few_bytes 仍维护、
+                    // chunk 仍照常转发），避免超长 SSE 响应无界占用内存。
+                    if all_stream_data.len() < MAX_STREAM_LOG_SIZE {
+                        let room = MAX_STREAM_LOG_SIZE - all_stream_data.len();
+                        let take = chunk.len().min(room);
+                        all_stream_data.extend_from_slice(&chunk[..take]);
+                    }
 
                     if chunk.len() > 8192 {
                         last_few_bytes = chunk.slice(chunk.len() - 8192..).to_vec();

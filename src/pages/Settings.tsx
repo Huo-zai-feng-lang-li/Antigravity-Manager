@@ -1313,7 +1313,7 @@ function Settings() {
                                     }
 
                                     // Hot reload: save immediately for manual changes
-                                    saveConfig({ ...updatedFormData, auto_refresh: true })
+                                    saveConfig(updatedFormData)
                                         .then(() => {
                                             console.log('Proxy config saved');
                                         })

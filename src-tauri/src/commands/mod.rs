@@ -1055,33 +1055,15 @@ pub async fn update_account_label(account_id: String, label: String) -> Result<(
         if label.is_empty() { "无" } else { &label }
     ));
 
-    // 1. 读取账号文件
-    let data_dir = modules::account::get_data_dir()?;
-    let account_path = data_dir
-        .join("accounts")
-        .join(format!("{}.json", account_id));
-
-    if !account_path.exists() {
-        return Err(format!("账号文件不存在: {}", account_id));
-    }
-
-    let content =
-        std::fs::read_to_string(&account_path).map_err(|e| format!("读取账号文件失败: {}", e))?;
-
-    let mut account_json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("解析账号文件失败: {}", e))?;
-
-    // 2. 更新 custom_label 字段
-    if label.is_empty() {
-        account_json["custom_label"] = serde_json::Value::Null;
+    // [FIX] 走与后台 token 刷新相同的「每账号锁 + 临时文件原子替换」路径（save_account），
+    // 避免直接 read-modify-write 与后台 save_account 竞态丢更新，以及非原子写中途崩溃损坏账号文件。
+    let mut account = modules::account::load_account(&account_id)?;
+    account.custom_label = if label.is_empty() {
+        None
     } else {
-        account_json["custom_label"] = serde_json::Value::String(label.clone());
-    }
-
-    // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
+        Some(label.clone())
+    };
+    modules::account::save_account(&account)?;
 
     modules::logger::log_info(&format!(
         "账号标签已更新: {} ({})",

@@ -1868,10 +1868,10 @@ pub async fn handle_messages(
     if let Some(email) = last_email {
         // [FIX] Include X-Mapped-Model in exhaustion error
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Account-Email",
-            header::HeaderValue::from_str(&email).unwrap(),
-        );
+        // [FIX] 非 ASCII/异常邮箱时 from_str 会 Err，原 unwrap 会 panic 断流；改为防御性跳过该响应头
+        if let Ok(email_val) = header::HeaderValue::from_str(&email) {
+            headers.insert("X-Account-Email", email_val);
+        }
         if let Some(model) = last_mapped_model {
             if let Ok(v) = header::HeaderValue::from_str(&model) {
                 headers.insert("X-Mapped-Model", v);

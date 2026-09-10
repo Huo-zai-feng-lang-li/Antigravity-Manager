@@ -49,18 +49,35 @@ impl ProxyMonitor {
         }
 
         // Auto cleanup old logs (keep last 30 days)
-        tokio::task::spawn_blocking(
-            move || match crate::modules::proxy_db::cleanup_old_logs(30) {
-                Ok(deleted) => {
-                    if deleted > 0 {
-                        tracing::info!("Auto cleanup: removed {} old logs (>30 days)", deleted);
-                    }
+        tokio::task::spawn_blocking(move || {
+            match crate::modules::proxy_db::cleanup_old_logs(30) {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!(
+                        "Startup cleanup: removed {} old proxy logs (>30 days)",
+                        deleted
+                    );
                 }
-                Err(e) => {
-                    tracing::error!("Failed to cleanup old logs: {}", e);
+                Err(e) => tracing::error!("Failed to cleanup proxy logs: {}", e),
+                _ => {}
+            }
+            // [FIX] 启动时一并清理历史堆积：security IP 访问日志、user token 用量明细
+            if let Ok(n) = crate::modules::security_db::cleanup_old_ip_logs(30) {
+                if n > 0 {
+                    tracing::info!(
+                        "Startup cleanup: removed {} old ip access logs (>30 days)",
+                        n
+                    );
                 }
-            },
-        );
+            }
+            if let Ok(n) = crate::modules::user_token_db::cleanup_old_usage_logs(30) {
+                if n > 0 {
+                    tracing::info!(
+                        "Startup cleanup: removed {} old user-token usage logs (>30 days)",
+                        n
+                    );
+                }
+            }
+        });
 
         // 运行期定期维护任务：每 6 小时执行一次日志清理。
         // 启动时的一次性清理只覆盖当次启动，长期运行（不重启）期间
@@ -76,17 +93,44 @@ impl ProxyMonitor {
                     let db_by_age = crate::modules::proxy_db::cleanup_old_logs(30);
                     let db_by_cap = crate::modules::proxy_db::limit_max_logs(2000);
                     let token_stats = crate::modules::token_stats::cleanup_old_records(30);
-                    (app_logs, db_by_age, db_by_cap, token_stats)
+                    // [FIX] security.db IP 访问日志、user_tokens.db 用量明细接入 6h 周期清理
+                    let ip_logs = crate::modules::security_db::cleanup_old_ip_logs(30);
+                    let user_token_usage =
+                        crate::modules::user_token_db::cleanup_old_usage_logs(30);
+                    // [FIX] tool_artifacts.db 原先仅启动清理一次，运行期持续增长，接入 6h 周期清理
+                    let tool_artifacts =
+                        crate::proxy::adapters::artifact_store::global_tool_artifact_store()
+                            .evict_expired_persisted();
+                    (
+                        app_logs,
+                        db_by_age,
+                        db_by_cap,
+                        token_stats,
+                        ip_logs,
+                        user_token_usage,
+                        tool_artifacts,
+                    )
                 })
                 .await;
                 match result {
-                    Ok((app_logs, db_by_age, db_by_cap, token_stats)) => {
+                    Ok((
+                        app_logs,
+                        db_by_age,
+                        db_by_cap,
+                        token_stats,
+                        ip_logs,
+                        user_token_usage,
+                        tool_artifacts,
+                    )) => {
                         tracing::info!(
-                            "Periodic maintenance done: app_logs={:?}, db_by_age={:?}, db_by_cap={:?}, token_stats={:?}",
+                            "Periodic maintenance done: app_logs={:?}, db_by_age={:?}, db_by_cap={:?}, token_stats={:?}, ip_logs={:?}, user_token_usage={:?}, tool_artifacts={:?}",
                             app_logs,
                             db_by_age,
                             db_by_cap,
-                            token_stats
+                            token_stats,
+                            ip_logs,
+                            user_token_usage,
+                            tool_artifacts
                         );
                     }
                     Err(e) => {

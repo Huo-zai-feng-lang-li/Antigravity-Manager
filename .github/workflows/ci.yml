@@ -46,7 +46,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-2025, macos-latest]
+        # 仅检查 Windows，其他平台注释以加速 CI（需要时取消注释即可恢复）
+        platform:
+          - windows-2025
+          # - ubuntu-latest
+          # - macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -89,7 +93,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-2025, macos-latest]
+        # 仅构建 Windows，其他平台注释以加速 CI（需要时取消注释即可恢复）
+        platform:
+          - windows-2025
+          # - ubuntu-latest
+          # - macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

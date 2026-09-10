@@ -6214,7 +6214,8 @@ mod websocket_session_tests {
 
     #[test]
     fn estimate_fallback_returns_positive_for_valid_payload() {
-        let payload = r#"{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hello world"}]}"#;
+        let payload =
+            r#"{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hello world"}]}"#;
         assert!(estimate_input_tokens_fallback(Some(payload)).is_some_and(|e| e > 0));
     }
 

@@ -3,17 +3,19 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
-    *   **v4.6.11 (2026-09-08)**:
-        -   **[Core Fix] Resolve Account Proxy Disabling State Desynchronization & Introduce Orphan Whitelist Defense**:
-            -   **Atomic State Updates & Mutex Synchronization**: Refactored `toggle_proxy_status` command to use the underlying atomic update interface `modules::account::toggle_proxy_status` guarded by the global `ACCOUNT_INDEX_LOCK` mutex, guaranteeing state changes are synchronized atomically across per-account JSON files, `accounts.json` global index, and the memory proxy pool.
-            -   **Whitelist-Based Account Loading Guard**: Added strict `accounts.json` index whitelist validation in `TokenManager::load_accounts`. Discards any unindexed orphan files discovered on disk, permanently preventing deleted or orphaned accounts from being resurrected and queried by the proxy engine.
-    *   **v4.6.10 (2026-09-08)**:
-        -   **[Core Feature] Cloudflare Named Tunnel Automated Orchestration, Edge Buffer-Bypassing, and Custom Domain UI Display**:
-            -   **Custom Domain Persistence & UI Display**: Added `custom_domain` field support in `CloudflaredConfig` and frontend `ApiProxy.tsx`. In Named Tunnel (Auth) mode, the configured public gateway domain is persisted and immediately displayed upon tunnel activation, resolving an issue where the tunnel URL remained blank due to log regex capture misses.
-            -   **SSE Streaming Anti-Buffering & Edge Performance**: Fully automated Cloudflare Named Tunnel ingress orchestration and Ruleset edge cache bypass rules, eliminating buffering stalls for LLM Server-Sent Events (SSE) streaming; activated HTTP/2 multiplexing, HTTP/3 (QUIC), and 0-RTT rapid handshakes.
-            -   **Optimized Cloudflare Edge IP Benchmarking**: Validated and supported low-latency domestic edge IP routing, compressing TCP physical handshake latency down to sub-100ms (measured at 94ms).
-        -   **[CI/CD Build Fix] Fix Minisign Public Key Truncation in Tauri Updater Configuration**:
-            -   **Minisign Key Integrity**: Resolved Base64 decoding failure (`failed to convert updater pubkey: Base64 conversion failed`) caused by a truncated `plugins.updater.pubkey` string in `tauri.conf.json`, unblocking automated cross-platform Release builds.
+    *   **v4.7.0 (2026-09-10)**:
+        -   **[Session & Proxy Fix] Prevent 400 Errors and Account Freezes from Upstream 1M Token Accumulation (PR #3415, Issue #3411, refs #3325)**:
+            -   **Scoped Session IDs per Conversation**: Replaced the account-email-only upstream `sessionId` hash with a scoped derivation combining `account_id`, conversation fingerprint, and a generation counter. Keeps upstream Prompt Cache hits stable within the same dialogue while strictly isolating different conversations from sharing one server-side session.
+            -   **Automatic Generation Bump & Transparent Recovery on 1M Overflow**: When receiving upstream `400 "The input token count exceeds the maximum number of tokens allowed"`, automatically increments the generation counter and retries with a fresh session, seamlessly recovering the dialogue without user intervention.
+        -   **[Adaptive Circuit Breaker] Zero-Quota Lockout & Dynamic Max Backoff Steps (PR #3413)**:
+            -   **Lock on Zero Quota Toggle (`lock_on_zero_quota`)**: Added a circuit breaker option to immediately lock an account until its upstream `reset_time` when 5-hour rolling or weekly quota hits 0%, skipping short backoffs and preventing wasted calls on exhausted accounts; auto-clears locks when quota recovers.
+            -   **Respect Configured Max Backoff Steps**: Removes the hardcoded 300s ceiling on retry lockouts, allowing longer user-configured backoffs (e.g. 1800s / 7200s) to take effect.
+            -   **Clear Stale Protection on Global Disable**: Automatically purges lingering `protected_models` from accounts when quota protection is disabled globally.
+        -   **[Proxy Protocol Compliance] Expose Standard Retry-After Header on Temporary 503 Responses (Issue #3414)**:
+            -   **Standardized Cooldown Header**: When all accounts are temporarily rate-limited (`All accounts limited. Wait Ns.`) resulting in a 503 Service Unavailable, extracts the cooldown duration and returns a standard `Retry-After: <seconds>` HTTP header across OpenAI, Claude, and Gemini proxy handlers.
+            -   **Client-Friendly Backoff**: Enables downstream AI tools and coding agents (e.g., Cursor, Cline, Aider, OpenCode) to accurately pause and back off according to the server cooldown rather than spamming retries.
+        -   **[Internationalization] Detect OS Language for New Configurations (PR #3412)**:
+            -   **System Language Auto-Detection**: Integrated lightweight system locale detection to initialize default language from the OS locale (supporting Traditional Chinese `zh-TW` / `zh-HK`, Simplified `zh`, `en`, `ja`, `ru`, `pt`, etc., with safe fallback to `en`), replacing the hardcoded `"zh"` default for new setups. Existing configurations remain unaffected.
     *   **v4.6.9 (2026-09-08)**:
         -   **[Core Fix] Honor store:false to Inhibit HTTP Session & Global Tool Call Cache Retention (PR #3408)**:
             -   **Respect store:false Parameter**: When full-replay requests explicitly pass `store:false` in the HTTP Responses path, avoids creating redundant session snapshots and background save tasks, significantly reducing memory growth during large-context replays.

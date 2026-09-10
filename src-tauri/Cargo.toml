@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-tools"
-version = "4.6.22"
+version = "4.7.0"
 description = "Antigravity Tools"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -32,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 base64 = "0.22"
 sysinfo = "0.31"
+sys-locale = "0.3.2"
 tokio = { version = "1", features = ["full"] }
 url = "2.5.7"
 tauri-plugin-dialog = "2.6.0"
@@ -39,7 +40,7 @@ tauri-plugin-fs = "2.4.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "webp"] }
 thiserror = "2.0.17"
 
-# 鍙嶄唬鏈嶅姟渚濊禆
+# 反代服务依赖
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 
@@ -51,12 +52,12 @@ eventsource-stream = "0.2"
 dashmap = "6.1"
 anyhow = "1.0"
 futures = "0.3"
-rand = "0.8"                        # 鐢熸垚 sessionId 鍜?mock project_id
-async-stream = "0.3.6"              # 绠€鍖栧紓姝ユ祦鐢熸垚
-regex = "1.12.2"                    # Duration 瑙ｆ瀽
-once_cell = "1.19"                  # 闈欐€佸垵濮嬪寲 (妯″瀷鏄犲皠琛?
-pin-project = "1.1"                 # Pin 鎶曞奖杈呭姪
-bytes = "1.5"                       # SSE 瀛楄妭鎿嶄綔
+rand = "0.8"                        # 生成 sessionId 和 mock project_id
+async-stream = "0.3.6"              # 简化异步流生成
+regex = "1.12.2"                    # Duration 解析
+once_cell = "1.19"                  # 静态初始化 (模型映射表)
+pin-project = "1.1"                 # Pin 投影辅助
+bytes = "1.5"                       # SSE 字节操作
 tauri-plugin-single-instance = { version = "2.3.6", features = ["deep-link"] }
 libc = "0.2"
 tracing-appender = "0.2.4"

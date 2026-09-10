@@ -177,11 +177,6 @@ function Settings() {
 
             await saveConfig(formData);
             showToast(t('common.saved'), 'success');
-
-            // 如果修改了代理配置，提示用户需要重启
-            if (proxyEnabled && proxyUrl) {
-                showToast(t('proxy.config.upstream_proxy.restart_hint'), 'info');
-            }
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
         }

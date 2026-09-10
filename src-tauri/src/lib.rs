@@ -8,6 +8,7 @@ mod modules;
 mod proxy; // Proxy service module
 mod utils;
 
+use modules::cloudflared::kill_all_cloudflared_processes;
 use modules::logger;
 use std::sync::Arc;
 use tauri::Manager;
@@ -765,6 +766,9 @@ pub fn run() {
                             }
                         });
                     }
+                    // 兜底：无论优雅停止是否成功，强制杀所有残留 cloudflared 进程
+                    // 防止孤儿进程继承 socket 句柄导致 8045 端口无法释放
+                    kill_all_cloudflared_processes();
                     if let Some(state) =
                         app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
                     {

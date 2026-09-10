@@ -1,4 +1,5 @@
 use crate::modules;
+use crate::modules::cloudflared::kill_all_cloudflared_processes;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -93,13 +94,19 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let state = app.state::<crate::commands::proxy::ProxyServiceState>();
                     let admin_server = state.admin_server.clone();
                     let instance = state.instance.clone();
+                    // 获取 cloudflared manager 用于退出时清理子进程
+                    let cf_manager = app
+                        .try_state::<crate::commands::cloudflared::CloudflaredState>()
+                        .map(|s| s.manager.clone());
                     tauri::async_runtime::spawn(async move {
+                        // 1. 停止 Admin Server
                         {
                             let mut lock = admin_server.write().await;
                             if let Some(admin) = lock.take() {
                                 admin.axum_server.stop();
                             }
                         }
+                        // 2. 停止反代服务实例
                         {
                             let mut lock = instance.write().await;
                             if let Some(inst) = lock.take() {
@@ -107,7 +114,22 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                                 inst.axum_server.set_running(false).await;
                             }
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        // 3. 优雅停止 cloudflared 隧道（2 秒超时）
+                        if let Some(manager) = cf_manager {
+                            let manager_lock = manager.read().await;
+                            if let Some(mgr) = manager_lock.as_ref() {
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    mgr.stop(),
+                                )
+                                .await;
+                            }
+                        }
+                        // 4. 兜底：强制杀所有残留 cloudflared 进程
+                        //    防止子进程句柄丢失或退出过快导致孤儿进程继承 socket 句柄、占用 8045 端口
+                        kill_all_cloudflared_processes();
+                        // 5. 给 server 和子进程足够时间释放端口（从 100ms 提到 500ms）
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         std::process::exit(0);
                     });
                 }

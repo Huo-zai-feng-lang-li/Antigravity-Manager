@@ -507,3 +507,50 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
 
     None
 }
+
+/// 强制杀死系统中所有残留的 cloudflared 进程（兜底清理）。
+///
+/// 背景：托盘退出时若仅依赖 manager.stop() 的 tokio child.kill()，
+/// 在子进程句柄丢失、锁竞争或 process::exit 过快时可能杀不干净，
+/// 残留的 cloudflared 会继承主进程的 socket 句柄导致 8045 端口无法释放。
+/// 这里用操作系统级命令强制杀所有同名进程，作为退出和启动时的兜底。
+///
+/// 返回 true 表示至少杀掉了一个进程。
+pub fn kill_all_cloudflared_processes() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        match std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "cloudflared.exe", "/T"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => {
+                let killed = status.success();
+                if killed {
+                    info!("[cloudflared] Force-killed all residual cloudflared.exe processes");
+                }
+                killed
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        match std::process::Command::new("pkill")
+            .args(["-9", "-f", "cloudflared"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => {
+                let killed = status.success();
+                if killed {
+                    info!("[cloudflared] Force-killed all residual cloudflared processes");
+                }
+                killed
+            }
+            Err(_) => false,
+        }
+    }
+}

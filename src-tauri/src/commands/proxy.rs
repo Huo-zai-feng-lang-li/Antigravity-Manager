@@ -1,3 +1,4 @@
+use crate::modules::cloudflared::kill_all_cloudflared_processes;
 use crate::proxy::monitor::{ProxyMonitor, ProxyRequestLog, ProxyStats};
 use crate::proxy::{ProxyConfig, ProxyPoolConfig, TokenManager};
 use serde::{Deserialize, Serialize};
@@ -99,6 +100,10 @@ pub async fn internal_start_proxy_service(
     integration: crate::modules::integration::SystemManager,
     cloudflared_state: Arc<crate::commands::cloudflared::CloudflaredState>,
 ) -> Result<ProxyStatus, String> {
+    // 0. 启动前清理残留的 cloudflared 子进程
+    //    防止上次退出不干净导致孤儿进程继承 socket 句柄、占用 8045 端口
+    kill_all_cloudflared_processes();
+
     // 1. 检查状态并加锁
     {
         let instance_lock = state.instance.read().await;

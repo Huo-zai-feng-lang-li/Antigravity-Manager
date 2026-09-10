@@ -456,12 +456,15 @@ export default function ApiProxy() {
 
 
     const saveConfig = async (newConfig: AppConfig) => {
+        // 备份旧配置，后端保存失败时回滚，避免前后端配置不一致
+        const oldConfig = appConfig;
         // 1. 立即更新 UI 状态，确保流畅
         setAppConfig(newConfig);
         try {
             await invoke('save_config', { config: newConfig });
         } catch (error) {
             console.error('保存配置失败:', error);
+            setAppConfig(oldConfig); // 回滚到保存前的配置
             showToast(`${t('common.error')}: ${error}`, 'error');
         }
     };

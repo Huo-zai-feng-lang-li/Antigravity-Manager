@@ -1172,8 +1172,12 @@ impl TokenManager {
         threshold: i32,
         model_name: &str,
     ) -> Result<bool, String> {
-        // 1. 初始化 protected_models 数组（如果不存在）
-        if account_json.get("protected_models").is_none() {
+        // 1. 确保 protected_models 是数组（不存在或被手改为非数组时重置为空数组，
+        //    否则 as_array_mut().unwrap() 会 panic）
+        if !account_json
+            .get("protected_models")
+            .map_or(false, |v| v.is_array())
+        {
             account_json["protected_models"] = serde_json::Value::Array(Vec::new());
         }
 
@@ -1197,10 +1201,10 @@ impl TokenManager {
             // 3. 写入磁盘
             let model_name_owned = model_name.to_string();
             update_account_json(account_path, move |latest| {
-                if latest
+                // 不存在或非数组时重置，避免 as_array_mut().unwrap() panic
+                if !latest
                     .get("protected_models")
-                    .and_then(|value| value.as_array())
-                    .is_none()
+                    .map_or(false, |v| v.is_array())
                 {
                     latest["protected_models"] = serde_json::Value::Array(Vec::new());
                 }

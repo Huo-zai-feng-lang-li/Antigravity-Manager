@@ -364,7 +364,7 @@ pub async fn monitor_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let _logging_enabled = state.monitor.is_enabled();
+    let logging_enabled = state.monitor.is_enabled();
 
     let method = request.method().to_string();
     let uri = request.uri().to_string();
@@ -419,7 +419,7 @@ pub async fn monitor_middleware(
     // 必须在处理 request body 之前提取，因为 into_parts() 后需要保留这个值
     let user_token_identity = request.extensions().get::<UserTokenIdentity>().cloned();
 
-    let request = if method == "POST" {
+    let request = if method == "POST" && logging_enabled {
         let (parts, body) = request.into_parts();
         match axum::body::to_bytes(body, MAX_REQUEST_LOG_SIZE).await {
             Ok(bytes) => {

@@ -66,6 +66,11 @@ pub fn get_db_path() -> Result<PathBuf, String> {
 pub fn connect_db() -> Result<Connection, String> {
     let path = get_db_path()?;
     let conn = Connection::open(&path).map_err(|e| format!("Failed to open database: {}", e))?;
+    // [FIX] 与 proxy_db/security_db/token_stats/artifact_store 对齐：
+    // WAL 持久化属性（幂等）；busy_timeout/synchronous 连接级。缺失时并发写会直接 SQLITE_BUSY。
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "busy_timeout", 5000);
+    let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     Ok(conn)
 }
 

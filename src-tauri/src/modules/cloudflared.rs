@@ -528,6 +528,9 @@ pub fn kill_all_cloudflared_processes() -> bool {
     {
         match std::process::Command::new("taskkill")
             .args(["/F", "/IM", "cloudflared.exe", "/T"])
+            // [FIX] 缺少 CREATE_NO_WINDOW 时，GUI 程序(spawn 无控制台)拉起 taskkill
+            // 会弹出黑窗口一闪而过（打开时启动清残留 + 关闭时退出兜底都会触发）
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

@@ -260,6 +260,39 @@ pub async fn internal_start_proxy_service(
 
     *instance_lock = Some(instance);
 
+    // [FIX] CF 隧道自动启动：全局配置 cloudflared.enabled=true 时，
+    // 反代就绪后自动拉起隧道（幂等：本管理器已在运行则跳过，避免重复 spawn）。
+    // 失败仅告警，不阻断反代启动。
+    if let Ok(app_config) = crate::modules::config::load_app_config() {
+        let cf_cfg = app_config.cloudflared;
+        if cf_cfg.enabled {
+            let manager_guard = cloudflared_state.manager.read().await;
+            if let Some(cf_manager) = manager_guard.as_ref() {
+                if !cf_manager.is_process_running().await {
+                    let (installed, _) = cf_manager.check_installed().await;
+                    if installed {
+                        match cf_manager.start(cf_cfg).await {
+                            Ok(status) => {
+                                if status.running {
+                                    state.set_public_tunnel_active(true).await;
+                                }
+                                tracing::info!(
+                                    "[cloudflared] Tunnel auto-started after proxy startup"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "[cloudflared] Auto-start skipped (proxy continues): {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 成功启动后，guard 在这里结束并重置 starting 是 OK 的
     // 但其实我们可以直接手动掉，或者相信 guard
     Ok(ProxyStatus {

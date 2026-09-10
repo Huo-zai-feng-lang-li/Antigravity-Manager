@@ -266,25 +266,36 @@ pub async fn internal_start_proxy_service(
     if let Ok(app_config) = crate::modules::config::load_app_config() {
         let cf_cfg = app_config.cloudflared;
         if cf_cfg.enabled {
-            let manager_guard = cloudflared_state.manager.read().await;
-            if let Some(cf_manager) = manager_guard.as_ref() {
-                if !cf_manager.is_process_running().await {
-                    let (installed, _) = cf_manager.check_installed().await;
-                    if installed {
-                        match cf_manager.start(cf_cfg).await {
-                            Ok(status) => {
-                                if status.running {
-                                    state.set_public_tunnel_active(true).await;
+            // [FIX] 必须先确保 manager 已初始化：CloudflaredState::new() 默认 manager=None，
+            // 只有 CF 命令（check/install/start/stop/status）会调用 ensure_manager 创建。
+            // 若启动路径（GUI/headless/重启反代）此前从未打开过 CF 页面，
+            // manager 为 None，自动拉起会被静默跳过 → CF 偶发不自启。
+            if let Err(e) = cloudflared_state.ensure_manager().await {
+                tracing::warn!(
+                    "[cloudflared] ensure_manager failed, auto-start skipped: {}",
+                    e
+                );
+            } else {
+                let manager_guard = cloudflared_state.manager.read().await;
+                if let Some(cf_manager) = manager_guard.as_ref() {
+                    if !cf_manager.is_process_running().await {
+                        let (installed, _) = cf_manager.check_installed().await;
+                        if installed {
+                            match cf_manager.start(cf_cfg).await {
+                                Ok(status) => {
+                                    if status.running {
+                                        state.set_public_tunnel_active(true).await;
+                                    }
+                                    tracing::info!(
+                                        "[cloudflared] Tunnel auto-started after proxy startup"
+                                    );
                                 }
-                                tracing::info!(
-                                    "[cloudflared] Tunnel auto-started after proxy startup"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "[cloudflared] Auto-start skipped (proxy continues): {}",
-                                    e
-                                );
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "[cloudflared] Auto-start skipped (proxy continues): {}",
+                                        e
+                                    );
+                                }
                             }
                         }
                     }

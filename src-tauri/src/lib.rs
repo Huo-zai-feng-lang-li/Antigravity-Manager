@@ -769,6 +769,19 @@ pub fn run() {
                     // 兜底：无论优雅停止是否成功，强制杀所有残留 cloudflared 进程
                     // 防止孤儿进程继承 socket 句柄导致 8045 端口无法释放
                     kill_all_cloudflared_processes();
+                    // 停止 Admin Server（8045 监听）并等待任务真正结束，确保端口释放
+                    if let Some(state) =
+                        app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
+                    {
+                        tauri::async_runtime::block_on(async {
+                            let mut admin_lock = state.admin_server.write().await;
+                            if let Some(admin) = admin_lock.take() {
+                                admin
+                                    .stop_with_wait(std::time::Duration::from_secs(3))
+                                    .await;
+                            }
+                        });
+                    }
                     if let Some(state) =
                         app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
                     {

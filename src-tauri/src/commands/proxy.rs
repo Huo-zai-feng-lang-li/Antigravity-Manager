@@ -28,8 +28,34 @@ pub struct ProxyServiceState {
 
 pub struct AdminServerInstance {
     pub axum_server: crate::proxy::AxumServer,
-    #[allow(dead_code)] // 保留句柄以便未来支持显式停服/诊断
     pub server_handle: tokio::task::JoinHandle<()>,
+}
+
+impl AdminServerInstance {
+    /// 停止 Axum server 并等待监听任务真正结束（带超时）。
+    ///
+    /// server.stop() 只发送 shutdown 信号后立即返回，不等待监听循环退出；
+    /// 若退出时仍有活跃连接，端口可能延迟释放。这里在发送信号后
+    /// await server_handle（JoinHandle），确保监听任务结束、TcpListener
+    /// drop 之后再继续退出流程。带 timeout 防止无限等待。
+    pub async fn stop_with_wait(self, timeout: std::time::Duration) {
+        self.axum_server.stop();
+        let handle = self.server_handle;
+        match tokio::time::timeout(timeout, handle).await {
+            Ok(Ok(())) => {
+                tracing::info!("Admin server stopped and joined");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Admin server task ended with error: {}", e);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "Admin server task did not finish within {:?}, proceeding with exit",
+                    timeout
+                );
+            }
+        }
+    }
 }
 
 /// 反代服务实例

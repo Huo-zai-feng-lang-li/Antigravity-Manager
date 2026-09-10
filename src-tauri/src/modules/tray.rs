@@ -99,11 +99,13 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         .try_state::<crate::commands::cloudflared::CloudflaredState>()
                         .map(|s| s.manager.clone());
                     tauri::async_runtime::spawn(async move {
-                        // 1. 停止 Admin Server
+                        // 1. 停止 Admin Server 并等待监听任务真正结束（3s 超时）
                         {
                             let mut lock = admin_server.write().await;
                             if let Some(admin) = lock.take() {
-                                admin.axum_server.stop();
+                                admin
+                                    .stop_with_wait(std::time::Duration::from_secs(3))
+                                    .await;
                             }
                         }
                         // 2. 停止反代服务实例

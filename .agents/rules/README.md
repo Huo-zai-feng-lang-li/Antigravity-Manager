@@ -35,6 +35,15 @@
   - 必须使用 `tokio::fs`、`tokio::time::sleep` 或通过 `tokio::task::spawn_blocking` 将同步任务隔离到阻塞线程池中。
 - **防止死锁**：跨异步等待（`.await`）持有同步锁（`std::sync::MutexGuard` / `std::sync::RwLockReadGuard`）属于严重架构违规，必须改用 `tokio::sync::*` 或在 `.await` 之前显式释放锁作用域。
 
+### 1.4 新版本发布与提交推送铁律 (Release Changelog & Auto-Push)
+- **新版本构建必须在日志文档详细描述**：
+  - 严禁“只递增版本号、不写更新日志”的偷懒行为。
+  - 每次版本升级（修改 `package.json`、`Cargo.toml`、`tauri.conf.json` 并打 Tag）前，**必须同步在 `CHANGELOG.md` 与 `CHANGELOG_EN.md` 中以中英双语详细记录变更要点**（涵盖核心修复、优化点、关联 Issue/PR、架构影响），严禁遗漏任何中间版本。
+- **提交即自动推送远程 (Commit-Auto-Push)**：
+  - **只要进行了代码提交（`git commit`），必须确保自动推送远程仓库（`origin`）及关联 Tags**。
+  - 本地仓库已固化配置 `.git/hooks/post-commit` 自动推送钩子及 `push.followTags true` / `push.default current`。
+  - 在任何未触发钩子的外部环境或自动化脚本中，执行 `git commit` 后必须无条件紧跟 `git push origin <branch> --tags`，彻底杜绝本地与远程状态脱节或 Tag 漏推。
+
 ---
 
 ## 2. 目录职责规范与防腐边界
@@ -70,8 +79,13 @@
    - **代码可编译**：`cargo check` / `cargo clippy` 零 Error。
    - **无回归风险**：核心模块变更必须通过现有的 `cargo test`。
    - **真实链路印证**：涉及 API 代理改动，需使用测试脚本或 curl 命令针对 local port 执行端到端流量取证。
-2. **变更审查清单**：
+2. **发布与推送纪律**：
+   - **版本更新必须附带 CHANGELOG**：修改版本号必须同步补齐 `CHANGELOG.md` 及 `CHANGELOG_EN.md`。
+   - **只要提交必须推送到远程**：依赖 `post-commit` 钩子或显式 `git push` 同步分支与 tags。
+3. **变更审查清单**：
    - [ ] 圈复杂度是否保持 < 9？
    - [ ] 是否存在任何未脱敏的凭证日志？
    - [ ] 是否破坏了原子化文件写入或并发锁安全性？
    - [ ] 是否兼顾了 Headless Web 模式与 Tauri 桌面端双向兼容？
+   - [ ] 递增版本号时，是否在 `CHANGELOG.md` 和 `CHANGELOG_EN.md` 中完整描述了本次更新？
+   - [ ] 本地提交后是否已自动/显式推送到远程仓库及对应 Tag？

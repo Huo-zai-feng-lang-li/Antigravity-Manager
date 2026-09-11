@@ -1,6 +1,12 @@
-# 最新接续状态 (2026-09-11 复审闭环)
+# 最新接续状态 (2026-09-11 v4.7.6 发布与规则固化闭环)
 
 ## 核心进展与交付结论
+
+- **v4.7.6 正式发布与推送闭环**：
+  1. **代码提交与 Tag**：Commit `8b1ca1f9`，Tag `v4.7.6`，包含代码性能重构与全量中英文更新日志。
+  2. **自动推送 Hook 生效**：`.git/hooks/post-commit` 部署就绪，任何 `git commit` 自动同步推送到远程 `origin` 及 tags。
+  3. **远程 GitHub 全量同步**：`main` 分支与 `v4.7.0` ~ `v4.7.6` 全量 Tags 100% 成功推送到远端。
+  4. **工程宪章规则追加**：在 `.agents/rules/README.md` 中固化“新版本构建必须描述日志”与“提交即自动推送远程”两条铁律。
 
 - **核心性能问题已修复（保留兼容边界）**：
   1. **Token 调度热路径去除配置读盘与候选深拷贝**：
@@ -22,14 +28,10 @@
 - **Cargo 编译与语法检查**：
   - `cargo fmt -- --check`: 退出码 0，全代码库无格式违规。
   - `cargo check`: 退出码 0，无编译报错。
-- **Cargo 全量单元测试（当前复审）**：
-  - `cargo test --manifest-path src-tauri/Cargo.toml --lib`:
-    ```
-    test result: ok. 623 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
-    ```
-  - 全量 623 个测试退出码 0；编译告警为既有告警。
+- **Cargo 全量单元测试**：
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib`: 623 passed; 0 failed.
 
-## 关键代码变动范围 (未提交 Git)
+## 已提交 Git 状态 (已同步至远程 origin)
 
 1. `src-tauri/src/proxy/token_manager.rs`:
    - `DashMap<String, Arc<ProxyToken>>` 结构重构与全链路借用/引用传递。

@@ -2061,7 +2061,7 @@ pub async fn handle_chat_completions(
             &openai_req,
             &project_id,
             &mapped_model,
-            proxy_token.as_ref(),
+            proxy_token.as_deref(),
         );
         let gemini_body_for_debug = debug_logger::is_enabled(&debug_cfg)
             .then(|| debug_value_without_inline_data(&gemini_body));
@@ -2124,13 +2124,16 @@ pub async fn handle_chat_completions(
         }
 
         let call_result = match upstream
-            .call_v1_internal_with_headers(
+            .call_v1_internal_with_headers_and_machine_id(
                 method,
                 &access_token,
                 gemini_body,
                 query_string,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
+                proxy_token
+                    .as_deref()
+                    .and_then(|token| token.machine_id.as_deref()),
             )
             .await
         {
@@ -3843,7 +3846,7 @@ pub async fn handle_completions(
                 &openai_req,
                 &project_id,
                 &mapped_model,
-                proxy_token.as_ref(),
+                proxy_token.as_deref(),
                 &routing_session_id,
                 signature_read_key.as_deref(),
             )
@@ -3852,7 +3855,7 @@ pub async fn handle_completions(
                 &openai_req,
                 &project_id,
                 &mapped_model,
-                proxy_token.as_ref(),
+                proxy_token.as_deref(),
             )
         };
         let gemini_body_for_debug = debug_logger::is_enabled(&debug_cfg)
@@ -3927,12 +3930,15 @@ pub async fn handle_completions(
         let query_string = if list_response { Some("alt=sse") } else { None };
 
         let call_result = match upstream
-            .call_v1_internal(
+            .call_v1_internal_with_machine_id(
                 method,
                 &access_token,
                 gemini_body,
                 query_string,
                 Some(account_id.as_str()),
+                proxy_token
+                    .as_deref()
+                    .and_then(|token| token.machine_id.as_deref()),
             )
             .await
         {
@@ -4928,12 +4934,16 @@ pub async fn handle_images_generations_internal(
                 });
 
                 match upstream
-                    .call_v1_internal(
+                    .call_v1_internal_with_machine_id(
                         "generateContent",
                         &access_token,
                         gemini_body,
                         None,
                         Some(account_id.as_str()),
+                        token_manager
+                            .get_token_by_id(&account_id)
+                            .as_deref()
+                            .and_then(|token| token.machine_id.as_deref()),
                     )
                     .await
                 {
@@ -5413,12 +5423,16 @@ pub async fn handle_images_edits(
                 );
 
                 match upstream
-                    .call_v1_internal(
+                    .call_v1_internal_with_machine_id(
                         "generateContent",
                         &access_token,
                         gemini_body,
                         None,
                         Some(account_id.as_str()),
+                        token_manager
+                            .get_token_by_id(&account_id)
+                            .as_deref()
+                            .and_then(|token| token.machine_id.as_deref()),
                     )
                     .await
                 {
@@ -7381,7 +7395,7 @@ async fn call_openai_gemini_sync(
     let token_obj = token_manager.get_token_by_id(&account_id);
     let session_id = format!("bg_sid_{}", chrono::Utc::now().timestamp_subsec_millis());
     let (gemini_body, _, _, _) =
-        transform_openai_request(request, &project_id, &session_id, token_obj.as_ref());
+        transform_openai_request(request, &project_id, &session_id, token_obj.as_deref());
 
     let upstream_url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",

@@ -1,12 +1,33 @@
 // 上游客户端实现
 // 基于高性能通讯接口封装
 
+use bytes::Bytes;
 use dashmap::DashMap;
 use rquest::{header, Client, Response, StatusCode};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
+
+static LOCAL_MACHINE_UID: OnceLock<String> = OnceLock::new();
+
+/// 获取本机 machine_uid 的进程级快照；读取失败时不缓存，允许后续重试。
+pub(crate) fn get_local_machine_uid() -> Option<String> {
+    if let Some(machine_id) = LOCAL_MACHINE_UID.get() {
+        return Some(machine_id.clone());
+    }
+
+    let machine_id = machine_uid::get().ok()?;
+    let _ = LOCAL_MACHINE_UID.set(machine_id);
+    LOCAL_MACHINE_UID.get().cloned()
+}
+
+fn resolve_request_machine_id(account_machine_id: Option<&str>) -> Option<String> {
+    account_machine_id
+        .filter(|machine_id| !machine_id.is_empty())
+        .map(str::to_owned)
+        .or_else(get_local_machine_uid)
+}
 
 /// 端点降级尝试的记录信息
 #[derive(Debug, Clone)]
@@ -73,6 +94,12 @@ fn header_names_for_log(headers: &header::HeaderMap) -> Vec<String> {
     let mut names: Vec<String> = headers.keys().map(|name| name.to_string()).collect();
     names.sort();
     names
+}
+
+fn serialize_request_body(body: &Value) -> Result<Bytes, String> {
+    serde_json::to_vec(body)
+        .map(Bytes::from)
+        .map_err(|e| e.to_string())
 }
 
 // Cloud Code v1internal endpoints (fallback order: Sandbox → Daily → Prod)
@@ -319,13 +346,34 @@ impl UpstreamClient {
         query_string: Option<&str>,
         account_id: Option<&str>, // [NEW] Account ID for proxy selection
     ) -> Result<UpstreamCallResult, String> {
-        self.call_v1_internal_with_headers(
+        self.call_v1_internal_with_machine_id(
+            method,
+            access_token,
+            body,
+            query_string,
+            account_id,
+            None,
+        )
+        .await
+    }
+
+    pub async fn call_v1_internal_with_machine_id(
+        &self,
+        method: &str,
+        access_token: &str,
+        body: Value,
+        query_string: Option<&str>,
+        account_id: Option<&str>,
+        machine_id: Option<&str>,
+    ) -> Result<UpstreamCallResult, String> {
+        self.call_v1_internal_with_headers_and_machine_id(
             method,
             access_token,
             body,
             query_string,
             std::collections::HashMap::new(),
             account_id,
+            machine_id,
         )
         .await
     }
@@ -340,6 +388,28 @@ impl UpstreamClient {
         query_string: Option<&str>,
         extra_headers: std::collections::HashMap<String, String>,
         account_id: Option<&str>, // [NEW] Account ID
+    ) -> Result<UpstreamCallResult, String> {
+        self.call_v1_internal_with_headers_and_machine_id(
+            method,
+            access_token,
+            body,
+            query_string,
+            extra_headers,
+            account_id,
+            None,
+        )
+        .await
+    }
+
+    pub async fn call_v1_internal_with_headers_and_machine_id(
+        &self,
+        method: &str,
+        access_token: &str,
+        body: Value,
+        query_string: Option<&str>,
+        extra_headers: std::collections::HashMap<String, String>,
+        account_id: Option<&str>,
+        machine_id: Option<&str>,
     ) -> Result<UpstreamCallResult, String> {
         // [NEW] Get client based on account (cached in proxy pool manager)
         let client = self.get_client(account_id).await;
@@ -376,24 +446,8 @@ impl UpstreamClient {
 
         // 2. Device & Session Identity
         // Machine ID (优先使用账号独立绑定的 DeviceProfile，实现多账号指纹隔离，防止关联风控)
-        // [FIX] load_account 是同步读盘，原实现每个上游请求都在 async 热路径阻塞 tokio worker；
-        // 移到 spawn_blocking，join 失败时降级为本机 machine_uid（与原 or_else 兜底一致）。
-        let owned_account_id = account_id.map(|id| id.to_string());
-        let loaded_account = tokio::task::spawn_blocking(move || {
-            owned_account_id.and_then(|id| crate::modules::account::load_account(&id).ok())
-        })
-        .await
-        .unwrap_or(None);
-        let resolved_machine_id: Option<String> = loaded_account
-            .and_then(|acc| acc.device_profile)
-            .map(|dp| {
-                if !dp.mac_machine_id.is_empty() {
-                    dp.mac_machine_id
-                } else {
-                    dp.machine_id
-                }
-            })
-            .or_else(|| machine_uid::get().ok());
+        // 设备画像随已选 Token 传入；无画像时才回退到进程级本机 ID。
+        let resolved_machine_id = resolve_request_machine_id(machine_id);
 
         if let Some(mid) = resolved_machine_id {
             if let Ok(mid_val) = header::HeaderValue::from_str(&mid) {
@@ -438,6 +492,7 @@ impl UpstreamClient {
         tracing::debug!(?header_names, "Final Upstream Request Header Names");
 
         let mut has_triggered_downgrade = false;
+        let body_bytes = serialize_request_body(&body)?;
 
         // [TEMPORARY FIX #3074] 针对 403 SERVICE_DISABLED 的自动降级重试逻辑
         // 我们包装一层循环，以便在检测到特定错误时移除 Header 并重试
@@ -450,8 +505,6 @@ impl UpstreamClient {
             for (idx, base_url) in V1_INTERNAL_BASE_URL_FALLBACKS.iter().enumerate() {
                 let url = Self::build_url(base_url, method, query_string);
                 let has_next = idx + 1 < V1_INTERNAL_BASE_URL_FALLBACKS.len();
-
-                let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
                 // 发送带确定 Content-Length 的标准 JSON 载荷
                 // 严禁对 POST 上游接口使用 wrap_stream，否则抹除 Content-Length 极易触发上游 429 或协议校验拒绝
@@ -623,6 +676,30 @@ mod tests {
         assert_eq!(
             url2,
             "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn test_serialize_request_body_returns_json_bytes() {
+        let body = serde_json::json!({"prompt": "hello"});
+        let bytes = serialize_request_body(&body).expect("valid JSON should serialize");
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), body);
+    }
+
+    #[test]
+    fn test_serialized_request_body_clones_share_storage() {
+        let body = serde_json::json!({"prompt": "hello"});
+        let bytes = serialize_request_body(&body).expect("valid JSON should serialize");
+        let cloned = bytes.clone();
+
+        assert_eq!(bytes.as_ptr(), cloned.as_ptr());
+    }
+
+    #[test]
+    fn test_request_machine_id_prefers_selected_token_snapshot() {
+        assert_eq!(
+            resolve_request_machine_id(Some("account-machine-id")),
+            Some("account-machine-id".to_string())
         );
     }
 

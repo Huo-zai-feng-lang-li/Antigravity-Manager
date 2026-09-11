@@ -2258,10 +2258,20 @@ mod tests {
     use crate::proxy::common::json_schema::clean_json_schema;
     use crate::proxy::config::{update_thinking_budget_config, ThinkingBudgetConfig};
 
-    struct ThinkingBudgetConfigReset;
+    static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct ThinkingBudgetConfigReset(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl ThinkingBudgetConfigReset {
+        fn new() -> Self {
+            let guard = CONFIG_TEST_MUTEX.lock().unwrap();
+            Self(guard)
+        }
+    }
 
     impl Drop for ThinkingBudgetConfigReset {
         fn drop(&mut self) {
+            crate::proxy::config::clear_test_thinking_budget_override();
             update_thinking_budget_config(ThinkingBudgetConfig::default());
         }
     }
@@ -3043,6 +3053,7 @@ mod tests {
 
     #[test]
     fn test_gemini_pro_thinking_support() {
+        let _lock = CONFIG_TEST_MUTEX.lock().unwrap();
         // Setup request for Gemini Pro (no -thinking suffix)
         let req = ClaudeRequest {
             model: "gemini-3-pro-preview".to_string(),
@@ -3088,6 +3099,7 @@ mod tests {
 
     #[test]
     fn test_gemini_pro_default_thinking() {
+        let _lock = CONFIG_TEST_MUTEX.lock().unwrap();
         // Setup request for Gemini Pro WITHOUT thinking config
         let req = ClaudeRequest {
             model: "gemini-3-pro-preview".to_string(),
@@ -3169,7 +3181,7 @@ mod tests {
 
     #[test]
     fn test_claude_adaptive_global_config() {
-        let _reset = ThinkingBudgetConfigReset;
+        let _reset = ThinkingBudgetConfigReset::new();
 
         // Set global config to Adaptive + High effort
         let config = ThinkingBudgetConfig {

@@ -2,10 +2,20 @@
 //! 安全监控相关的数据库操作
 
 use parking_lot::{Mutex, MutexGuard};
+#[cfg(test)]
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use rusqlite::{params, Connection, Error as SqlError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+#[cfg(test)]
+pub static TEST_SECURITY_MUTEX: ReentrantMutex<()> = ReentrantMutex::new(());
+
+#[cfg(test)]
+pub fn lock_security_test() -> ReentrantMutexGuard<'static, ()> {
+    TEST_SECURITY_MUTEX.lock()
+}
 
 /// IP 访问日志
 #[derive(Debug, Clone, Serialize, Deserialize)]

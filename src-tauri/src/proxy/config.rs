@@ -26,8 +26,27 @@ pub fn normalize_proxy_url(url: &str) -> String {
 // ============================================================================
 static GLOBAL_THINKING_BUDGET_CONFIG: OnceLock<RwLock<ThinkingBudgetConfig>> = OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    static TEST_OVERRIDE_THINKING_BUDGET: std::cell::RefCell<Option<ThinkingBudgetConfig>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub fn clear_test_thinking_budget_override() {
+    let _ = TEST_OVERRIDE_THINKING_BUDGET.try_with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
 /// 获取当前 Thinking Budget 配置
 pub fn get_thinking_budget_config() -> ThinkingBudgetConfig {
+    #[cfg(test)]
+    {
+        if let Ok(Some(cfg)) = TEST_OVERRIDE_THINKING_BUDGET.try_with(|cell| cell.borrow().clone())
+        {
+            return cfg;
+        }
+    }
     GLOBAL_THINKING_BUDGET_CONFIG
         .get()
         .and_then(|lock| lock.read().ok())
@@ -37,6 +56,14 @@ pub fn get_thinking_budget_config() -> ThinkingBudgetConfig {
 
 /// 更新全局 Thinking Budget 配置
 pub fn update_thinking_budget_config(config: ThinkingBudgetConfig) {
+    #[cfg(test)]
+    {
+        let _ = TEST_OVERRIDE_THINKING_BUDGET.try_with(|cell| {
+            *cell.borrow_mut() = Some(config.clone());
+        });
+        return;
+    }
+    #[allow(unreachable_code)]
     if let Some(lock) = GLOBAL_THINKING_BUDGET_CONFIG.get() {
         if let Ok(mut cfg) = lock.write() {
             *cfg = config.clone();

@@ -45,6 +45,7 @@ fn create_test_token(
         email: email.to_string(),
         account_path: PathBuf::from("/tmp/test"),
         project_id: None,
+        machine_id: None,
         subscription_tier: tier.map(|s| s.to_string()),
         remaining_quota,
         protected_models: HashSet::new(),

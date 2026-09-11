@@ -1147,7 +1147,7 @@ async fn try_compress_gemini_with_summary(
         INTERNAL_BACKGROUND_TASK,
         Some(account_id),
         Some(session_id_str),
-        token_obj.as_ref(),
+        token_obj.as_deref(),
     );
 
     let upstream_url = format!(

@@ -213,6 +213,7 @@ pub async fn internal_start_proxy_service(
     token_manager
         .update_circuit_breaker_config(app_config.circuit_breaker)
         .await;
+    token_manager.update_quota_protection_config(app_config.quota_protection);
 
     // 🆕 [FIX #820] 恢复固定账号模式设置
     if let Some(ref account_id) = config.preferred_account_id {

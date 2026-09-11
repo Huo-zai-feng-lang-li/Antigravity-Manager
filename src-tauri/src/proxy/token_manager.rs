@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use tokio_util::sync::CancellationToken;
 
@@ -142,6 +142,7 @@ pub struct ProxyToken {
     pub validation_url: Option<String>, // [NEW] Validation URL (#1522)
     pub model_quotas: HashMap<String, i32>, // [OPTIMIZATION] In-memory cache for model-specific quotas
     pub model_limits: HashMap<String, u64>, // [NEW] max_output_tokens per model from quota data
+    pub machine_id: Option<String>,         // [PERF] 内存中预解析的设备指纹，消除请求热路径读盘
 }
 
 /// Sticky 会话绑定条目（含绑定时间，用于定期清理过期绑定）。
@@ -155,7 +156,7 @@ struct StickyBinding {
 const STICKY_BINDING_TTL: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
 
 pub struct TokenManager {
-    tokens: Arc<DashMap<String, ProxyToken>>, // account_id -> ProxyToken
+    pub(crate) tokens: Arc<DashMap<String, Arc<ProxyToken>>>, // account_id -> Arc<ProxyToken>
     current_index: Arc<AtomicUsize>,
     last_used_account: Arc<tokio::sync::Mutex<Option<(String, std::time::Instant)>>>,
     data_dir: PathBuf,
@@ -165,6 +166,8 @@ pub struct TokenManager {
     preferred_account_id: Arc<tokio::sync::RwLock<Option<String>>>, // [FIX #820] 优先使用的账号ID（固定账号模式）
     health_scores: Arc<DashMap<String, f32>>,                       // account_id -> health_score
     circuit_breaker_config: Arc<tokio::sync::RwLock<crate::models::CircuitBreakerConfig>>, // [NEW] 熔断配置缓存
+    quota_protection_enabled: Arc<AtomicBool>,
+    quota_protection_config: Arc<std::sync::RwLock<crate::models::QuotaProtectionConfig>>,
 
     // [NEW] 按账号分配的同步刷新锁。
     // 用于实现 Double-Checked Locking，防止并发请求导致单个账号短时间内多次调用 OAuth Refresh。
@@ -199,6 +202,10 @@ impl TokenManager {
             health_scores: Arc::new(DashMap::new()),
             circuit_breaker_config: Arc::new(tokio::sync::RwLock::new(
                 crate::models::CircuitBreakerConfig::default(),
+            )),
+            quota_protection_enabled: Arc::new(AtomicBool::new(false)),
+            quota_protection_config: Arc::new(std::sync::RwLock::new(
+                crate::models::QuotaProtectionConfig::default(),
             )),
             refresh_locks: Arc::new(DashMap::new()),
             load_code_assist_inflight: Arc::new(DashMap::new()), // 初始化 inflight 表
@@ -286,6 +293,16 @@ impl TokenManager {
     pub async fn load_accounts(&self) -> Result<usize, String> {
         let accounts_dir = self.data_dir.join("accounts");
 
+        if let Some(config) = tokio::task::spawn_blocking(|| {
+            crate::modules::config::load_app_config().map(|config| config.quota_protection)
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        {
+            self.update_quota_protection_config(config);
+        }
+
         if !accounts_dir.exists() {
             return Err(format!("账号目录不存在: {:?}", accounts_dir));
         }
@@ -365,7 +382,7 @@ impl TokenManager {
             match self.load_single_account(&path).await {
                 Ok(Some(token)) => {
                     let account_id = token.account_id.clone();
-                    self.tokens.insert(account_id, token);
+                    self.tokens.insert(account_id, Arc::new(token));
                     count += 1;
                 }
                 Ok(None) => {
@@ -399,7 +416,7 @@ impl TokenManager {
                         self.rate_limit_tracker.clear(account_id);
                     }
                 }
-                self.tokens.insert(account_id.to_string(), token);
+                self.tokens.insert(account_id.to_string(), Arc::new(token));
                 self.sync_image_scheduler_accounts();
                 Ok(())
             }
@@ -441,9 +458,9 @@ impl TokenManager {
         self.sync_image_scheduler_accounts();
     }
 
-    /// 根据账号 ID 获取完整的 ProxyToken 对象 (v4.1.29)
-    pub fn get_token_by_id(&self, account_id: &str) -> Option<ProxyToken> {
-        self.tokens.get(account_id).map(|t| t.clone())
+    /// 根据账号 ID 获取共享的 ProxyToken 快照 (v4.1.29)
+    pub fn get_token_by_id(&self, account_id: &str) -> Option<Arc<ProxyToken>> {
+        self.tokens.get(account_id).map(|t| t.value().clone())
     }
 
     /// Check if an account has been disabled on disk.
@@ -808,6 +825,21 @@ impl TokenManager {
         // [NEW] 同步零配额持续熔断状态（若开启 lock_on_zero_quota 且 5h/周配额为 0，持续熔断至 reset_time）
         self.sync_zero_quota_circuit_breaker(&account_id, &account);
 
+        // [PERF] 预先解析并缓存设备指纹，避免热路径中对 account 文件的重复读盘
+        let resolved_machine_id: Option<String> = account
+            .get("device_profile")
+            .and_then(|v| serde_json::from_value::<crate::models::DeviceProfile>(v.clone()).ok())
+            .and_then(|dp| {
+                if !dp.mac_machine_id.is_empty() {
+                    Some(dp.mac_machine_id)
+                } else if !dp.machine_id.is_empty() {
+                    Some(dp.machine_id)
+                } else {
+                    None
+                }
+            })
+            .or_else(crate::proxy::upstream::client::get_local_machine_uid);
+
         Ok(Some(ProxyToken {
             account_id,
             access_token,
@@ -836,6 +868,7 @@ impl TokenManager {
                 .map(|s| s.to_string()),
             model_quotas,
             model_limits,
+            machine_id: resolved_machine_id,
         }))
     }
 
@@ -847,10 +880,7 @@ impl TokenManager {
         account_path: &PathBuf,
     ) -> bool {
         // 1. 加载配额保护配置
-        let config = match crate::modules::config::load_app_config() {
-            Ok(cfg) => cfg.quota_protection,
-            Err(_) => return false, // 配置加载失败，跳过保护
-        };
+        let config = self.cached_quota_protection_config();
 
         if !config.enabled {
             // [FIX] 当配额保护在全局关闭时，清空受保护模型列表，避免遗留锁定显示与调度过滤
@@ -1376,18 +1406,21 @@ impl TokenManager {
     /// * `attempted` - 已尝试失败的账号 ID 集合
     /// * `normalized_target` - 归一化后的目标模型名
     /// * `quota_protection_enabled` - 是否启用配额保护
-    fn select_with_p2c<'a>(
+    fn select_with_p2c<'a, I>(
         &self,
-        candidates: &'a [ProxyToken],
+        candidates: I,
         attempted: &HashSet<String>,
         normalized_target: &str,
         quota_protection_enabled: bool,
-    ) -> Option<&'a ProxyToken> {
+    ) -> Option<&'a ProxyToken>
+    where
+        I: IntoIterator<Item = &'a ProxyToken>,
+    {
         use rand::Rng;
 
         // 过滤可用 token
         let available: Vec<&ProxyToken> = candidates
-            .iter()
+            .into_iter()
             .filter(|t| !attempted.contains(&t.account_id))
             .filter(|t| {
                 !quota_protection_enabled || !t.protected_models.contains(normalized_target)
@@ -1666,7 +1699,7 @@ impl TokenManager {
         target_model: &str,
         excluded_accounts: &HashSet<String>,
     ) -> Result<(String, String, String, String, u64), String> {
-        let mut tokens_snapshot: Vec<ProxyToken> =
+        let mut tokens_snapshot: Vec<Arc<ProxyToken>> =
             self.tokens.iter().map(|e| e.value().clone()).collect();
         tokens_snapshot.retain(|token| !excluded_accounts.contains(&token.account_id));
         let mut total = tokens_snapshot.len();
@@ -1788,10 +1821,9 @@ impl TokenManager {
         let scheduling = self.sticky_config.read().await.clone();
         use crate::proxy::sticky_config::SchedulingMode;
 
-        // 【新增】检查配额保护是否启用（如果关闭，则忽略 protected_models 检查）
-        let quota_protection_enabled = crate::modules::config::load_app_config()
-            .map(|cfg| cfg.quota_protection.enabled)
-            .unwrap_or(false);
+        // 配额保护开关从内存快照读取，避免每个请求同步读盘。
+        let quota_protection_enabled = self.quota_protection_enabled.load(Ordering::Relaxed);
+        let circuit_breaker_config = self.circuit_breaker_config.read().await.clone();
 
         // ===== [FIX #820] 固定账号模式：优先使用指定账号 =====
         let preferred_id = self.preferred_account_id.read().await.clone();
@@ -1843,9 +1875,11 @@ impl TokenManager {
                             )
                             .unwrap_or_else(|| target_model.to_string());
 
-                        let is_rate_limited = self
-                            .is_rate_limited(&preferred_token.account_id, Some(&normalized_target))
-                            .await;
+                        let is_rate_limited = self.is_rate_limited_with_config(
+                            &preferred_token.account_id,
+                            Some(&normalized_target),
+                            &circuit_breaker_config,
+                        );
                         let is_quota_protected = quota_protection_enabled
                             && preferred_token
                                 .protected_models
@@ -1858,7 +1892,7 @@ impl TokenManager {
                             );
 
                             // 直接使用优先账号，跳过轮询逻辑
-                            let mut token = preferred_token.clone();
+                            let mut token = (*preferred_token).clone();
 
                             // [NEW] 检查 token 是否过期（调整刷新时机对齐官方：90s 宽限期）
                             let now = chrono::Utc::now().timestamp();
@@ -1880,7 +1914,7 @@ impl TokenManager {
                                 if let Some(latest) = latest_token_opt {
                                     if now < latest.timestamp - 90 {
                                         // 已经被别人刷过了，同步最新数据并跳过刷新动作
-                                        token = latest.clone();
+                                        token = (*latest).clone();
                                         tracing::debug!(
                                             "账号 {} 已由并发线程刷新，跳过重复刷新",
                                             token.email
@@ -1907,9 +1941,12 @@ impl TokenManager {
                                                 if let Some(mut entry) =
                                                     self.tokens.get_mut(&token.account_id)
                                                 {
-                                                    entry.access_token = token.access_token.clone();
-                                                    entry.expires_in = token.expires_in;
-                                                    entry.timestamp = token.timestamp;
+                                                    let mut updated = (**entry).clone();
+                                                    updated.access_token =
+                                                        token.access_token.clone();
+                                                    updated.expires_in = token.expires_in;
+                                                    updated.timestamp = token.timestamp;
+                                                    *entry = Arc::new(updated);
                                                 }
                                                 // [FIX] 写盘操作后台化：避免阻塞 get_token 的 5s 超时窗口
                                                 // 内存已更新完毕，将磁盘持久化 spawn 到 blocking 线程池
@@ -1970,7 +2007,7 @@ impl TokenManager {
                             }
 
                             // 确保有 project_id (filter empty strings to trigger re-fetch)
-                            let project_id = if let Some(pid) = &token.project_id {
+                            let project_id: Option<String> = if let Some(pid) = &token.project_id {
                                 if pid.is_empty() {
                                     None
                                 } else {
@@ -1991,7 +2028,9 @@ impl TokenManager {
                                         if let Some(mut entry) =
                                             self.tokens.get_mut(&token.account_id)
                                         {
-                                            entry.project_id = Some(pid.clone());
+                                            let mut updated = (**entry).clone();
+                                            updated.project_id = Some(pid.clone());
+                                            *entry = Arc::new(updated);
                                         }
                                         // [FIX] 写盘后台化：project_id 已写入内存，磁盘持久化不阻塞热路径
                                         {
@@ -2059,7 +2098,7 @@ impl TokenManager {
             let rotate = force_rotate || attempt > 0;
 
             // ===== 【核心】粘性会话与智能调度逻辑 =====
-            let mut target_token: Option<ProxyToken> = None;
+            let mut target_token: Option<Arc<ProxyToken>> = None;
 
             // 归一化目标模型名为标准 ID，用于配额保护检查
             let normalized_target =
@@ -2142,9 +2181,12 @@ impl TokenManager {
                             tokens_snapshot.iter().find(|t| &t.account_id == account_id)
                         {
                             // 【修复】检查限流状态和配额保护，避免复用已被锁定的账号
-                            if !self
-                                .is_rate_limited(&found.account_id, Some(&normalized_target))
-                                .await
+                            let is_rate_limited = self.is_rate_limited_with_config(
+                                &found.account_id,
+                                Some(&normalized_target),
+                                &circuit_breaker_config,
+                            );
+                            if !is_rate_limited
                                 && !(quota_protection_enabled
                                     && found.protected_models.contains(&normalized_target))
                             {
@@ -2154,10 +2196,7 @@ impl TokenManager {
                                 );
                                 target_token = Some(found.clone());
                             } else {
-                                if self
-                                    .is_rate_limited(&found.account_id, Some(&normalized_target))
-                                    .await
-                                {
+                                if is_rate_limited {
                                     tracing::debug!(
                                         "60s Window: Last account {} is rate-limited, skipping",
                                         found.email
@@ -2173,23 +2212,27 @@ impl TokenManager {
                 // 若无锁定，则使用 P2C 选择账号 (避免热点问题)
                 if target_token.is_none() {
                     // 先过滤出未限流的账号
-                    let mut non_limited: Vec<ProxyToken> = Vec::new();
+                    let mut non_limited: Vec<&ProxyToken> = Vec::new();
                     for t in &tokens_snapshot {
-                        if !self
-                            .is_rate_limited(&t.account_id, Some(&normalized_target))
-                            .await
-                        {
-                            non_limited.push(t.clone());
+                        if !self.is_rate_limited_with_config(
+                            &t.account_id,
+                            Some(&normalized_target),
+                            &circuit_breaker_config,
+                        ) {
+                            non_limited.push(t.as_ref());
                         }
                     }
 
                     if let Some(selected) = self.select_with_p2c(
-                        &non_limited,
+                        non_limited.iter().copied(),
                         &attempted,
                         &normalized_target,
                         quota_protection_enabled,
                     ) {
-                        target_token = Some(selected.clone());
+                        target_token = tokens_snapshot
+                            .iter()
+                            .find(|t| t.account_id == selected.account_id)
+                            .cloned();
                         need_update_last_used =
                             Some((selected.account_id.clone(), std::time::Instant::now()));
 
@@ -2217,24 +2260,28 @@ impl TokenManager {
                 tracing::debug!("🔄 [Mode C] P2C selection from {} candidates", total);
 
                 // 先过滤出未限流的账号
-                let mut non_limited: Vec<ProxyToken> = Vec::new();
+                let mut non_limited: Vec<&ProxyToken> = Vec::new();
                 for t in &tokens_snapshot {
-                    if !self
-                        .is_rate_limited(&t.account_id, Some(&normalized_target))
-                        .await
-                    {
-                        non_limited.push(t.clone());
+                    if !self.is_rate_limited_with_config(
+                        &t.account_id,
+                        Some(&normalized_target),
+                        &circuit_breaker_config,
+                    ) {
+                        non_limited.push(t.as_ref());
                     }
                 }
 
                 if let Some(selected) = self.select_with_p2c(
-                    &non_limited,
+                    non_limited.iter().copied(),
                     &attempted,
                     &normalized_target,
                     quota_protection_enabled,
                 ) {
                     tracing::debug!("  {} - SELECTED via P2C", selected.email);
-                    target_token = Some(selected.clone());
+                    target_token = tokens_snapshot
+                        .iter()
+                        .find(|t| t.account_id == selected.account_id)
+                        .cloned();
 
                     if rotate {
                         tracing::debug!("Force Rotation: Switched to account: {}", selected.email);
@@ -2243,7 +2290,7 @@ impl TokenManager {
             }
 
             let mut token = match target_token {
-                Some(t) => t,
+                Some(t) => (*t).clone(),
                 None => {
                     // 乐观重置策略: 双层防护机制
                     // 计算最短等待时间
@@ -2277,12 +2324,11 @@ impl TokenManager {
                             let mut retry_token = None;
                             for token in &tokens_snapshot {
                                 if attempted.contains(&token.account_id)
-                                    || self
-                                        .is_rate_limited(
-                                            &token.account_id,
-                                            Some(&normalized_target),
-                                        )
-                                        .await
+                                    || self.is_rate_limited_with_config(
+                                        &token.account_id,
+                                        Some(&normalized_target),
+                                        &circuit_breaker_config,
+                                    )
                                     || (quota_protection_enabled
                                         && token.protected_models.contains(&normalized_target))
                                 {
@@ -2297,7 +2343,7 @@ impl TokenManager {
                                     "✅ Buffer delay successful! Found available account: {}",
                                     t.email
                                 );
-                                t.clone()
+                                (**t).clone()
                             } else {
                                 // Layer 2: 缓冲后仍无可用账号,执行乐观重置
                                 tracing::warn!(
@@ -2320,7 +2366,7 @@ impl TokenManager {
                                         "✅ Optimistic reset successful! Using account: {}",
                                         t.email
                                     );
-                                    t.clone()
+                                    (**t).clone()
                                 } else {
                                     return Err(
                                         "All accounts failed after optimistic reset.".to_string()
@@ -2376,7 +2422,7 @@ impl TokenManager {
                 let latest_token_opt = self.tokens.get(&token.account_id).map(|r| r.clone());
                 if let Some(latest) = latest_token_opt {
                     if now < latest.timestamp - TOKEN_REFRESH_BUFFER_SECS {
-                        token = latest.clone();
+                        token = (*latest).clone();
                         tracing::debug!("账号 {} 已由并发线程在循环中刷新，跳过", token.email);
                     } else {
                         tracing::debug!(
@@ -2400,9 +2446,11 @@ impl TokenManager {
                                 token.timestamp = now + token_response.expires_in;
 
                                 if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
-                                    entry.access_token = token.access_token.clone();
-                                    entry.expires_in = token.expires_in;
-                                    entry.timestamp = token.timestamp;
+                                    let mut updated = (**entry).clone();
+                                    updated.access_token = token.access_token.clone();
+                                    updated.expires_in = token.expires_in;
+                                    updated.timestamp = token.timestamp;
+                                    *entry = Arc::new(updated);
                                 }
                                 // [FIX] 写盘操作后台化：内存已更新，磁盘持久化 spawn 到 blocking 线程池
                                 // 避免在 get_token 的 5s 超时窗口内因磁盘 I/O 或锁争抢导致超时
@@ -2531,7 +2579,9 @@ impl TokenManager {
                         {
                             Ok(pid) => {
                                 if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
-                                    entry.project_id = Some(pid.clone());
+                                    let mut updated = (**entry).clone();
+                                    updated.project_id = Some(pid.clone());
+                                    *entry = Arc::new(updated);
                                 }
                                 let _ = self.save_project_id(&token.account_id, &pid).await;
                                 Ok(pid)
@@ -2576,7 +2626,9 @@ impl TokenManager {
                                 Ok(pid) => {
                                     if let Some(mut entry) = self.tokens.get_mut(&token.account_id)
                                     {
-                                        entry.project_id = Some(pid.clone());
+                                        let mut updated = (**entry).clone();
+                                        updated.project_id = Some(pid.clone());
+                                        *entry = Arc::new(updated);
                                     }
                                     // [FIX] 写盘后台化：project_id 已写入内存，磁盘持久化不阻塞热路径
                                     {
@@ -2814,9 +2866,11 @@ impl TokenManager {
 
                 // 更新缓存
                 if let Some(mut entry) = self.tokens.get_mut(&account_id) {
-                    entry.access_token = token_response.access_token.clone();
-                    entry.expires_in = token_response.expires_in;
-                    entry.timestamp = new_now;
+                    let mut updated = (**entry).clone();
+                    updated.access_token = token_response.access_token.clone();
+                    updated.expires_in = token_response.expires_in;
+                    updated.timestamp = new_now;
+                    *entry = Arc::new(updated);
                 }
 
                 // 保存到磁盘
@@ -2873,12 +2927,17 @@ impl TokenManager {
 
     /// 检查账号是否在限流中 (支持模型级)
     pub async fn is_rate_limited(&self, account_id: &str, model: Option<&str>) -> bool {
-        // [NEW] 检查熔断是否启用
-        let config = self.circuit_breaker_config.read().await;
-        if !config.enabled {
-            return false;
-        }
-        self.rate_limit_tracker.is_rate_limited(account_id, model)
+        let config = self.circuit_breaker_config.read().await.clone();
+        self.is_rate_limited_with_config(account_id, model, &config)
+    }
+
+    fn is_rate_limited_with_config(
+        &self,
+        account_id: &str,
+        model: Option<&str>,
+        config: &crate::models::CircuitBreakerConfig,
+    ) -> bool {
+        config.enabled && self.rate_limit_tracker.is_rate_limited(account_id, model)
     }
 
     /// 获取距离限流重置还有多少秒
@@ -2989,15 +3048,7 @@ impl TokenManager {
     /// }
     /// ```
     pub async fn has_available_account(&self, _quota_group: &str, target_model: &str) -> bool {
-        // [FIX] load_app_config performs synchronous file I/O; this function is on the
-        // per-request path (claude.rs fallback check), so run it on the blocking pool.
-        let quota_protection_enabled = tokio::task::spawn_blocking(|| {
-            crate::modules::config::load_app_config()
-                .map(|cfg| cfg.quota_protection.enabled)
-                .unwrap_or(false)
-        })
-        .await
-        .unwrap_or(false);
+        let quota_protection_enabled = self.quota_protection_enabled.load(Ordering::Relaxed);
 
         // 遍历所有账号,检查是否有可用的
         for entry in self.tokens.iter() {
@@ -3650,6 +3701,25 @@ impl TokenManager {
         tracing::debug!("Circuit breaker configuration updated");
     }
 
+    pub fn update_quota_protection_config(&self, config: crate::models::QuotaProtectionConfig) {
+        if let Ok(mut cached) = self.quota_protection_config.write() {
+            *cached = config.clone();
+        }
+        self.quota_protection_enabled
+            .store(config.enabled, Ordering::Relaxed);
+        tracing::debug!(
+            enabled = config.enabled,
+            "Quota protection configuration updated"
+        );
+    }
+
+    fn cached_quota_protection_config(&self) -> crate::models::QuotaProtectionConfig {
+        self.quota_protection_config
+            .read()
+            .map(|config| config.clone())
+            .unwrap_or_default()
+    }
+
     /// [NEW] 获取熔断器配置
     pub async fn get_circuit_breaker_config(&self) -> crate::models::CircuitBreakerConfig {
         self.circuit_breaker_config.read().await.clone()
@@ -3966,8 +4036,10 @@ impl TokenManager {
     ) -> Result<(), String> {
         // 1. Update memory
         if let Some(mut token) = self.tokens.get_mut(account_id) {
-            token.validation_blocked = true;
-            token.validation_blocked_until = block_until;
+            let mut updated = (**token).clone();
+            updated.validation_blocked = true;
+            updated.validation_blocked_until = block_until;
+            *token = Arc::new(updated);
         }
 
         // 2. Persist to disk
@@ -4014,7 +4086,9 @@ impl TokenManager {
 
         if let Some(ref url) = extracted_url {
             if let Some(mut token) = self.tokens.get_mut(account_id) {
-                token.validation_url = Some(url.clone());
+                let mut updated = (**token).clone();
+                updated.validation_url = Some(url.clone());
+                *token = Arc::new(updated);
             }
         }
 
@@ -4764,6 +4838,7 @@ mod tests {
             email: email.to_string(),
             account_path: PathBuf::from("/tmp/test"),
             project_id: None,
+            machine_id: None,
             subscription_tier: tier.map(|s| s.to_string()),
             remaining_quota,
             protected_models: HashSet::new(),
@@ -5108,6 +5183,7 @@ mod tests {
             email: email.to_string(),
             account_path: PathBuf::from("/tmp/test"),
             project_id: None,
+            machine_id: None,
             subscription_tier: Some("PRO".to_string()),
             remaining_quota,
             protected_models,
@@ -5134,12 +5210,86 @@ mod tests {
 
         // 运行多次确保选择高配额账号
         for _ in 0..10 {
-            let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", false);
+            let result =
+                manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", false);
             assert!(result.is_some());
             // P2C 从两个候选中选择配额更高的
             // 由于只有两个候选，应该总是选择 high_quota
             assert_eq!(result.unwrap().email, "high@test.com");
         }
+    }
+
+    #[test]
+    fn test_p2c_accepts_borrowed_candidates_without_cloning() {
+        let manager = TokenManager::new(PathBuf::from("/tmp/test"));
+        let candidates = vec![
+            create_test_token("a@test.com", Some("PRO"), 1.0, None, Some(80)),
+            create_test_token("b@test.com", Some("PRO"), 1.0, None, Some(20)),
+        ];
+        let borrowed: Vec<&ProxyToken> = candidates.iter().collect();
+        let attempted = HashSet::new();
+
+        let selected = manager
+            .select_with_p2c(borrowed.iter().copied(), &attempted, "claude-sonnet", false)
+            .expect("a borrowed candidate should be selectable");
+
+        assert!(borrowed
+            .iter()
+            .any(|candidate| std::ptr::eq(*candidate, selected)));
+    }
+
+    #[test]
+    fn test_get_token_by_id_returns_shared_token() {
+        let manager = TokenManager::new(PathBuf::from("/tmp/test"));
+        let token = Arc::new(create_test_token(
+            "shared@test.com",
+            Some("PRO"),
+            1.0,
+            None,
+            Some(80),
+        ));
+        manager
+            .tokens
+            .insert(token.account_id.clone(), token.clone());
+
+        let selected = manager
+            .get_token_by_id(&token.account_id)
+            .expect("token should exist");
+
+        assert!(Arc::ptr_eq(&token, &selected));
+    }
+
+    #[test]
+    fn test_quota_protection_config_updates_memory_snapshot() {
+        let manager = TokenManager::new(PathBuf::from("/tmp/test"));
+        assert!(!manager
+            .quota_protection_enabled
+            .load(std::sync::atomic::Ordering::Relaxed));
+
+        manager.update_quota_protection_config(crate::models::QuotaProtectionConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        assert!(manager
+            .quota_protection_enabled
+            .load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_quota_protection_full_config_is_cached_for_reload() {
+        let manager = TokenManager::new(PathBuf::from("/tmp/test"));
+        let config = crate::models::QuotaProtectionConfig {
+            enabled: true,
+            threshold_percentage: 17,
+            ..Default::default()
+        };
+
+        manager.update_quota_protection_config(config.clone());
+
+        let cached = manager.cached_quota_protection_config();
+        assert_eq!(cached.enabled, config.enabled);
+        assert_eq!(cached.threshold_percentage, config.threshold_percentage);
     }
 
     #[test]
@@ -5154,7 +5304,7 @@ mod tests {
         let mut attempted: HashSet<String> = HashSet::new();
         attempted.insert("a@test.com".to_string());
 
-        let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", false);
+        let result = manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", false);
         assert!(result.is_some());
         assert_eq!(result.unwrap().email, "b@test.com");
     }
@@ -5175,7 +5325,7 @@ mod tests {
         let candidates = vec![protected_account, normal_account];
         let attempted: HashSet<String> = HashSet::new();
 
-        let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", true);
+        let result = manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", true);
         assert!(result.is_some());
         assert_eq!(result.unwrap().email, "normal@test.com");
     }
@@ -5189,7 +5339,7 @@ mod tests {
         let candidates = vec![token];
         let attempted: HashSet<String> = HashSet::new();
 
-        let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", false);
+        let result = manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", false);
         assert!(result.is_some());
         assert_eq!(result.unwrap().email, "single@test.com");
     }
@@ -5202,7 +5352,7 @@ mod tests {
         let candidates: Vec<ProxyToken> = vec![];
         let attempted: HashSet<String> = HashSet::new();
 
-        let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", false);
+        let result = manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", false);
         assert!(result.is_none());
     }
 
@@ -5219,7 +5369,7 @@ mod tests {
         attempted.insert("a@test.com".to_string());
         attempted.insert("b@test.com".to_string());
 
-        let result = manager.select_with_p2c(&candidates, &attempted, "claude-sonnet", false);
+        let result = manager.select_with_p2c(candidates.iter(), &attempted, "claude-sonnet", false);
         assert!(result.is_none());
     }
 
@@ -5550,8 +5700,11 @@ mod tests {
                 let mut token =
                     create_test_token("rebuild@test.com", Some("PRO"), 1.0, None, Some(50));
                 token.account_path = account_file;
+                token.project_id = Some("test-project".to_string());
                 token.model_quotas.insert(quota_key, 50);
-                manager.tokens.insert(token.account_id.clone(), token);
+                manager
+                    .tokens
+                    .insert(token.account_id.clone(), Arc::new(token));
             })
         };
 

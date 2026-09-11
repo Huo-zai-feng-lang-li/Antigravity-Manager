@@ -1533,6 +1533,7 @@ fn apply_profile_to_account(
         });
     }
     save_account(account)?;
+    crate::proxy::server::trigger_account_reload(&account.id);
     Ok(())
 }
 
@@ -1563,6 +1564,7 @@ pub fn restore_device_version(account_id: &str, version_id: &str) -> Result<Devi
         h.is_current = h.id == version_id;
     }
     save_account(&account)?;
+    crate::proxy::server::trigger_account_reload(account_id);
     Ok(target_profile)
 }
 
@@ -1599,6 +1601,7 @@ pub fn apply_device_profile(account_id: &str) -> Result<DeviceProfile, String> {
     device::write_profile(&storage_path, &profile)?;
     account.update_last_used();
     save_account(&account)?;
+    crate::proxy::server::trigger_account_reload(account_id);
     Ok(profile)
 }
 
@@ -1612,6 +1615,7 @@ pub fn restore_original_device() -> Result<String, String> {
                     h.is_current = false;
                 }
                 save_account(&account)?;
+                crate::proxy::server::trigger_account_reload(&current_id);
                 return Ok(
                     "Reset current account bound profile to original (not applied to storage)"
                         .to_string(),

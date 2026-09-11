@@ -263,7 +263,7 @@ pub async fn handle_generate(
             &mapped_model,
             Some(account_id.as_str()),
             Some(&session_id),
-            token_obj.as_ref(),
+            token_obj.as_deref(),
             Some(&token_manager),
         );
 
@@ -306,13 +306,16 @@ pub async fn handle_generate(
         }
 
         let call_result = match upstream
-            .call_v1_internal_with_headers(
+            .call_v1_internal_with_headers_and_machine_id(
                 upstream_method,
                 &access_token,
                 wrapped_body,
                 query_string,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
+                token_obj
+                    .as_deref()
+                    .and_then(|token| token.machine_id.as_deref()),
             )
             .await
         {
@@ -1022,13 +1025,18 @@ pub async fn execute_count_tokens(state: AppState, model_name: String, body: Val
     // 4. 调用上游 v1internal:countTokens
     let call_result = match state
         .upstream
-        .call_v1_internal_with_headers(
+        .call_v1_internal_with_headers_and_machine_id(
             "countTokens",
             &access_token,
             wrapped_body,
             None,
             std::collections::HashMap::new(),
             Some(account_id.as_str()),
+            state
+                .token_manager
+                .get_token_by_id(&account_id)
+                .as_deref()
+                .and_then(|token| token.machine_id.as_deref()),
         )
         .await
     {

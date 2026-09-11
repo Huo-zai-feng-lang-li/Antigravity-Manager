@@ -50,6 +50,7 @@ mod security_db_tests {
 
     #[test]
     fn test_db_initialization() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         // 验证数据库初始化不会 panic
         let result = init_db();
         assert!(
@@ -61,6 +62,7 @@ mod security_db_tests {
 
     #[test]
     fn test_db_multiple_initializations() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         // 验证多次初始化不会出错 (幂等性)
         for _ in 0..3 {
             let result = init_db();
@@ -77,6 +79,7 @@ mod security_db_tests {
 
     #[test]
     fn test_blacklist_add_and_check() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -106,6 +109,7 @@ mod security_db_tests {
 
     #[test]
     fn test_blacklist_remove() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -127,6 +131,7 @@ mod security_db_tests {
 
     #[test]
     fn test_blacklist_get_entry_details() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -160,6 +165,7 @@ mod security_db_tests {
 
     #[test]
     fn test_cidr_matching_basic() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -195,6 +201,7 @@ mod security_db_tests {
 
     #[test]
     fn test_cidr_matching_various_masks() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -227,6 +234,7 @@ mod security_db_tests {
 
     #[test]
     fn test_cidr_edge_cases() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -265,6 +273,7 @@ mod security_db_tests {
 
     #[test]
     fn test_blacklist_expiration() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -287,6 +296,7 @@ mod security_db_tests {
 
     #[test]
     fn test_blacklist_not_yet_expired() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -306,6 +316,7 @@ mod security_db_tests {
 
     #[test]
     fn test_permanent_blacklist() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -329,6 +340,7 @@ mod security_db_tests {
 
     #[test]
     fn test_whitelist_add_and_check() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -345,6 +357,7 @@ mod security_db_tests {
 
     #[test]
     fn test_whitelist_cidr() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -367,6 +380,7 @@ mod security_db_tests {
 
     #[test]
     fn test_access_log_save_and_retrieve() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -406,6 +420,7 @@ mod security_db_tests {
 
     #[test]
     fn test_access_log_blocked_filter() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -454,6 +469,7 @@ mod security_db_tests {
 
     #[test]
     fn test_access_log_filter_treats_sql_syntax_as_plain_text() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -490,6 +506,7 @@ mod security_db_tests {
 
     #[test]
     fn test_ip_stats() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -544,6 +561,7 @@ mod security_db_tests {
 
     #[test]
     fn test_cleanup_old_logs() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -603,6 +621,7 @@ mod security_db_tests {
 
     #[test]
     fn test_concurrent_access() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         use std::thread;
 
         let _ = init_db();
@@ -638,6 +657,7 @@ mod security_db_tests {
 
     #[test]
     fn test_duplicate_blacklist_entry() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -654,6 +674,7 @@ mod security_db_tests {
 
     #[test]
     fn test_empty_ip_pattern() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -668,6 +689,7 @@ mod security_db_tests {
 
     #[test]
     fn test_special_characters_in_reason() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -686,6 +708,7 @@ mod security_db_tests {
 
     #[test]
     fn test_hit_count_increment() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -722,6 +745,7 @@ mod ip_filter_middleware_tests {
     /// 验证 IP 提取逻辑的正确性
     #[test]
     fn test_ip_extraction_priority() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         // X-Forwarded-For 应该优先于 X-Real-IP
         // X-Real-IP 应该优先于 ConnectInfo
         // 这里只验证逻辑概念，实际测试需要构造 HTTP 请求
@@ -752,6 +776,7 @@ mod performance_benchmarks {
     /// 基准测试：黑名单查找性能
     #[test]
     fn benchmark_blacklist_lookup() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
 
         // 清理并添加 100 个黑名单条目
@@ -792,6 +817,7 @@ mod performance_benchmarks {
     /// 基准测试：CIDR 匹配性能
     #[test]
     fn benchmark_cidr_matching() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
 
         // 清理并添加 CIDR 规则

@@ -177,6 +177,10 @@ pub async fn handle_warmup(
     // ===== 步骤 3: 调用 UpstreamClient =====
     let model_lower = req.model.to_lowercase();
     let prefer_non_stream = model_lower.contains("flash-lite") || model_lower.contains("2.5-pro");
+    let token_snapshot = state.token_manager.get_token_by_id(&account_id);
+    let machine_id = token_snapshot
+        .as_deref()
+        .and_then(|token| token.machine_id.as_deref());
 
     let (method, query) = if prefer_non_stream {
         ("generateContent", None)
@@ -186,12 +190,13 @@ pub async fn handle_warmup(
 
     let mut result = state
         .upstream
-        .call_v1_internal(
+        .call_v1_internal_with_machine_id(
             method,
             &access_token,
             body.clone(),
             query,
             Some(account_id.as_str()),
+            machine_id,
         )
         .await;
 
@@ -199,12 +204,13 @@ pub async fn handle_warmup(
     if result.is_err() && !prefer_non_stream {
         result = state
             .upstream
-            .call_v1_internal(
+            .call_v1_internal_with_machine_id(
                 "generateContent",
                 &access_token,
                 body,
                 None,
                 Some(account_id.as_str()),
+                machine_id,
             )
             .await;
     }

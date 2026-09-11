@@ -37,6 +37,7 @@ mod integration_tests {
     /// 3. 响应体包含封禁原因
     #[test]
     fn test_scenario_blacklist_blocks_request() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -74,6 +75,7 @@ mod integration_tests {
     /// 3. 请求应该被允许（白名单优先）
     #[test]
     fn test_scenario_whitelist_priority() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -111,6 +113,7 @@ mod integration_tests {
     /// 3. 请求应该被允许
     #[test]
     fn test_scenario_temporary_ban_expiration() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -147,6 +150,7 @@ mod integration_tests {
     /// 3. 192.168.2.x 的请求正常通过
     #[test]
     fn test_scenario_cidr_subnet_blocking() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -189,6 +193,7 @@ mod integration_tests {
     ///    - 剩余封禁时间（如果是临时）
     #[test]
     fn test_scenario_ban_message_details() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -234,6 +239,7 @@ mod integration_tests {
     /// 3. 访问日志记录：IP、时间、状态(403)、封禁原因
     #[test]
     fn test_scenario_blocked_request_logging() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -278,6 +284,7 @@ mod integration_tests {
     /// 2. 与没有安全检查的基线相比，延迟增加 < 10ms
     #[test]
     fn test_scenario_performance_impact() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -326,6 +333,7 @@ mod integration_tests {
     /// 2. 数据仍然存在
     #[test]
     fn test_scenario_data_persistence() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -370,6 +378,7 @@ mod stress_tests {
     /// 压力测试：大量黑名单条目
     #[test]
     fn stress_test_large_blacklist() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
@@ -414,6 +423,7 @@ mod stress_tests {
     /// 压力测试：大量访问日志
     #[test]
     fn stress_test_access_logging() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         let _ = clear_ip_access_logs();
 
@@ -457,6 +467,7 @@ mod stress_tests {
     /// 压力测试：并发操作
     #[test]
     fn stress_test_concurrent_operations() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 

@@ -117,12 +117,16 @@ pub async fn handle_audio_transcription(
     // 8. 发送请求到 Gemini
     let upstream = state.upstream.clone();
     let response = upstream
-        .call_v1_internal(
+        .call_v1_internal_with_machine_id(
             "generateContent",
             &access_token,
             wrapped_body,
             None,
             Some(account_id.as_str()),
+            token_manager
+                .get_token_by_id(&account_id)
+                .as_deref()
+                .and_then(|token| token.machine_id.as_deref()),
         )
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("上游请求失败: {}", e)))?

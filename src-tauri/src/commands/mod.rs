@@ -458,6 +458,9 @@ pub async fn save_config(
             .token_manager
             .update_circuit_breaker_config(config.circuit_breaker.clone())
             .await;
+        instance
+            .token_manager
+            .update_quota_protection_config(config.quota_protection.clone());
         tracing::debug!("已同步热更新反代服务配置");
     }
 

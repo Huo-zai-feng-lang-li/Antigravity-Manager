@@ -1100,7 +1100,7 @@ pub async fn handle_messages(
             retried_without_thinking,
             Some(account_id.as_str()),
             &session_id_str,
-            token_obj.as_ref(),
+            token_obj.as_deref(),
         ) {
             Ok(b) => {
                 debug!(
@@ -1199,13 +1199,16 @@ pub async fn handle_messages(
         // Upstream call configuration continued...
 
         let call_result = match upstream
-            .call_v1_internal_with_headers(
+            .call_v1_internal_with_headers_and_machine_id(
                 method,
                 &access_token,
                 gemini_body,
                 query,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
+                token_obj
+                    .as_deref()
+                    .and_then(|token| token.machine_id.as_deref()),
             )
             .await
         {
@@ -2360,7 +2363,7 @@ async fn call_gemini_sync(
         false,
         Some(account_id.as_str()),
         trace_id,
-        token_obj.as_ref(),
+        token_obj.as_deref(),
     )
     .map_err(|e| format!("Failed to transform request: {}", e))?;
 

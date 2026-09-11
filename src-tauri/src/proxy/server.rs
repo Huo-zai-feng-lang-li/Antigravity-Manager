@@ -1680,6 +1680,14 @@ async fn admin_save_config(
         state.upstream.clear_client_cache();
     }
 
+    state
+        .token_manager
+        .update_quota_protection_config(new_config.quota_protection);
+    state
+        .token_manager
+        .update_circuit_breaker_config(new_config.circuit_breaker)
+        .await;
+
     Ok(StatusCode::OK)
 }
 

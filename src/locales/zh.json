@@ -927,7 +927,8 @@
       "require_proxy_running": "请先启动本地反代服务,再开启隧道",
       "connection_info": "连接信息",
       "local_port": "本地端口",
-      "tunnel_protocol": "隧道协议"
+      "tunnel_protocol": "隧道协议",
+      "toggle_tooltip": "开关会持久化，程序重启根据关闭前状态自动启停"
     },
     "example": {
       "title": "使用示例",

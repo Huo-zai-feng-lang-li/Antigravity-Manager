@@ -35,10 +35,15 @@
   - 必须使用 `tokio::fs`、`tokio::time::sleep` 或通过 `tokio::task::spawn_blocking` 将同步任务隔离到阻塞线程池中。
 - **防止死锁**：跨异步等待（`.await`）持有同步锁（`std::sync::MutexGuard` / `std::sync::RwLockReadGuard`）属于严重架构违规，必须改用 `tokio::sync::*` 或在 `.await` 之前显式释放锁作用域。
 
-### 1.4 新版本发布与提交推送铁律 (Release Changelog & Auto-Push)
-- **新版本构建必须在日志文档详细描述**：
-  - 严禁“只递增版本号、不写更新日志”的偷懒行为。
-  - 每次版本升级（修改 `package.json`、`Cargo.toml`、`tauri.conf.json` 并打 Tag）前，**必须同步在 `CHANGELOG.md` 与 `CHANGELOG_EN.md` 中以中英双语详细记录变更要点**（涵盖核心修复、优化点、关联 Issue/PR、架构影响），严禁遗漏任何中间版本。
+### 1.4 请求热路径零磁盘 I/O (Zero Disk I/O on Hot Path)
+- **热路径严禁读盘**：在代理路由分流、选号调度（`TokenManager`）、请求头注入等请求高频热路径（Hot Path）上，**严禁执行任何磁盘文件读取**（例如同步调用 `load_app_config()` 或读取账号 JSON）。
+- **纯内存快照机制**：所有动态配置变更必须由后台任务或命令通道单向同步至内存原子变量（如 `AtomicBool`）或读写快照（如 `Arc<RwLock<T>>`），调度器与代理层仅消费纯内存状态。
+- **设备指纹预装载**：账号绑定的 `machine_id` 必须在应用启动或账号加载时预解析并缓存在 `ProxyToken` 内存结构中，调度时直接透传，消除上游请求头构造时的磁盘兜底读。
+
+### 1.5 新版本发布与提交推送铁律 (Release Changelog & Auto-Push)
+- **新版本构建必须在日志文档详细描述 (Release Changelog)**：
+  - **为什么需要版本日志**：Git 提交记录（Commit Logs）可能因历史清理、Squash 或 Rebase 而重写丢失，且提交信息分散且面向微观代码。面向用户和集成方的版本日志（`CHANGELOG.md` 与 `CHANGELOG_EN.md`）是不可替代的对外契约与演进资产。
+  - **边界界定**：**日常工程提交（日常 Bugfix、WIP 小步提交）无需更新日志文档**；只有在**递增版本号发布新版本**（修改 `package.json`、`Cargo.toml`、`tauri.conf.json` 并打 Tag）时，**必须同步在 `CHANGELOG.md` 与 `CHANGELOG_EN.md` 中以中英双语详细记录变更要点**，严禁遗漏。
 - **提交即自动推送远程 (Commit-Auto-Push)**：
   - **只要进行了代码提交（`git commit`），必须确保自动推送远程仓库（`origin`）及关联 Tags**。
   - 本地仓库已固化配置 `.git/hooks/post-commit` 自动推送钩子及 `push.followTags true` / `push.default current`。

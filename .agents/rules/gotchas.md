@@ -83,3 +83,40 @@
 - **现象**：VS Code 对保存在 `state.vscdb` 中的 OAuth Session 具有严格的 Protobuf 序列化结构与校验特征。
 - **防御对策**：
   - 注入前必须严格校验结构体字段，确保 `service_machine_id`、`session_id` 与账号 Token 的对应关系一致，防止注入后 IDE 弹出“凭据已失效”提示。
+
+---
+
+## 5. 高性能网络与流式通讯陷阱
+
+### 5.1 调度与转发热路径严禁磁盘 I/O
+- **现象**：在高并发请求（每秒数十上百次 API 调用）下，系统延迟陡增，CPU 占用率飙升，甚至出现请求队列堆积。
+- **根因**：在 `TokenManager::get_next_token_for_model` 或请求头注入等高频热路径（Hot Path）中，调用了 `load_app_config()` 或同步读盘函数去检查配置/账号状态。
+- **防御对策**：
+  - 热路径必须 100% 消费纯内存快照：
+    - 开关型配置（如配额保护模式）采用 `AtomicBool` 进行纳秒级无锁原子读取。
+    - 结构化配置使用 `Arc<RwLock<T>>` 内存快照，由配置更新通道单向同步。
+    - 账号 `machine_id` 在加载或绑定时预解析并存入 `ProxyToken` 内存结构，调度选号后直接透传，消除上游请求头构造时的磁盘兜底读。
+
+### 5.2 客户端主动断开 (Client Disconnect) 与 499 虚假告警
+- **现象**：客户端在使用流式对话（SSE）或 Codex WebSocket 时，用户按 Esc/Ctrl+C 或关闭 IDE，服务端产生大量 500 错误日志并拉低健康监控评分。
+- **防御对策**：
+  - 在 SSE 流和 WebSocket 处理循环中，专门捕获通道关闭错误（`broken pipe`、`ConnectionReset`、`WebSocketClosed`）。
+  - 显式标记为 `499 Client Closed Request`，将其归入正常客户端终止流程，记录 debug/info 日志，严禁记入系统内部 500 告警指标。
+
+---
+
+## 6. 测试开发与多线程并发隔离陷阱
+
+### 6.1 `cargo test` 默认多线程导致 SQLite 数据库锁死或数据污染
+- **现象**：单独运行某个测试均成功，但在运行全量 `cargo test` 时，涉及 `security_db` 或 SQLite 的测试随机出现 `database is locked (code 5)` 或测试用例相互污染失败（Flaky Tests）。
+- **根因**：`cargo test` 默认并行执行多个测试线程，多个测试同时打开或写入同一个本地 SQLite 测试数据库文件。
+- **防御对策**：
+  - 涉及 SQLite 持久化或全局单例测试，必须通过全局重入锁 `TEST_SECURITY_MUTEX`（`parking_lot::ReentrantMutex`）进行测试串行化保护。
+  - 每个测试运行前后必须调用 `clear_for_test()` 或建立独立临时内存数据库（`:memory:`）。
+
+### 6.2 全局单例配置测试污染与 `thread_local!` 隔离
+- **现象**：一个测试修改了 `ThinkingBudgetConfig` 或实验性开关，导致后续完全不相干的测试用例断言失败。
+- **防御对策**：
+  - 在测试环境中，针对全局动态配置，优先使用 `thread_local!` 进行单线程隔离存储。
+  - 确保测试用例在执行变更后通过 RAII Guard 或在 `tear_down` 中还原为默认配置，禁止产生跨测试状态泄露。
+

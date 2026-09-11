@@ -934,7 +934,8 @@
       "require_proxy_running": "Please start the local proxy service first",
       "connection_info": "Connection Info",
       "local_port": "Local Port",
-      "tunnel_protocol": "Tunnel Protocol"
+      "tunnel_protocol": "Tunnel Protocol",
+      "toggle_tooltip": "State is persisted; tunnel will auto-start or stay stopped on next launch based on this switch"
     },
     "example": {
       "title": "Usage Examples",

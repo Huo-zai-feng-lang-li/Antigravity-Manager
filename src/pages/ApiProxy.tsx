@@ -63,6 +63,7 @@ interface CollapsibleCardProps {
     defaultExpanded?: boolean;
     rightElement?: React.ReactNode;
     allowInteractionWhenDisabled?: boolean;
+    tooltip?: string;
 }
 
 function CollapsibleCard({
@@ -74,6 +75,7 @@ function CollapsibleCard({
     defaultExpanded = false,
     rightElement,
     allowInteractionWhenDisabled = false,
+    tooltip,
 }: CollapsibleCardProps) {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
     const { t } = useTranslation();
@@ -106,13 +108,19 @@ function CollapsibleCard({
                     {rightElement}
 
                     {enabled !== undefined && onToggle && (
-                        <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                             <input
                                 type="checkbox"
                                 className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500"
                                 checked={enabled}
                                 onChange={(e) => onToggle(e.target.checked)}
                             />
+                            {tooltip && (
+                                <HelpTooltip
+                                    text={tooltip}
+                                    placement="left"
+                                />
+                            )}
                         </div>
                     )}
 
@@ -2062,6 +2070,7 @@ print(response.choices[0].message.content)`;
                                     enabled={cfStatus.running}
                                     onToggle={handleCfToggle}
                                     allowInteractionWhenDisabled={true}
+                                    tooltip={t('proxy.cloudflared.toggle_tooltip', { defaultValue: '开关会持久化，程序重启根据关闭前状态自动启停' })}
                                     rightElement={
                                         cfLoading ? (
                                             <span className="loading loading-spinner loading-xs"></span>

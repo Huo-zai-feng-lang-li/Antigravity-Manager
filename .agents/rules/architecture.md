@@ -23,10 +23,12 @@
          v                                                       v
 +----------------------------------+     +----------------------------------+
 |      协议转换层 (Handlers)       |     |        管理控制面 (Admin API)     |
-| - handlers/openai.rs (Chat/Completions)| - 账号 CRUD & 配额查询           |
-| - handlers/claude.rs (Messages API)    | - 代理池配置与健康检查           |
-| - handlers/gemini.rs (Native Gemini)   | - 规则路由与模型重定向映射       |
-| - handlers/audio.rs & warmup.rs        | - 服务日志与统计监控看板         |
+| - handlers/openai.rs:            |     | - 账号 CRUD & 配额查询           |
+|   Chat/Completions & Codex WS    |     | - 代理池配置与健康检查           |
+|   (/v1/responses & /responses)   |     | - 规则路由与模型重定向映射       |
+| - handlers/claude.rs (Messages)  |     | - 服务日志与统计监控看板         |
+| - handlers/gemini.rs (v1beta)    |     | - 图像调度器 (ImageScheduler)    |
+| - handlers/audio.rs & mcp.rs     |     | - CLI/OpenCode/Droid 同步控制    |
 +-----------------+----------------+     +-----------------+----------------+
                   |                                        |
                   +-------------------+--------------------+
@@ -34,8 +36,10 @@
                                       v
 +-------------------------------------------------------------------------+
 |                      核心调度层: TokenManager                            |
-| - 内存账号池缓存 (Arc<RwLock<HashMap<String, Account>>>)                  |
+| - 零拷贝账号池缓存: Arc<DashMap<String, Arc<ProxyToken>>>               |
+| - 内存原子快照: AtomicBool (配额保护开关) & 熔断配置单次捕获            |
 | - 智能调度器: 权衡剩余配额 (Quota)、健康评分 (Health Score)、活跃度 (LRU) |
+| - 设备画像预解析 (machine_id 内存缓存并随 Token 显式透传，消除读盘)      |
 | - 429 冷却与自动熔断跟踪 (LiveLimitStatus / Circuit Breaker)             |
 | - 并发防击穿锁 (Double-Checked Locking & In-flight Token Refresh)        |
 +------------------------------------+------------------------------------+
@@ -44,6 +48,7 @@
 +-------------------------------------------------------------------------+
 |                     上游通信与 TLS 指纹仿真层: UpstreamClient            |
 | - rquest (基于 BoringSSL 仿真 Chrome 123 TLS 指纹、ALPN、HTTP/2)        |
+| - 请求体单次序列化: 循环外预转 bytes::Bytes，多端点 Fallback 仅 Clone 引用|
 | - 多端点自动 Fallback:                                                   |
 |     1. Sandbox: daily-cloudcode-pa.sandbox.googleapis.com/v1internal    |
 |     2. Daily: daily-cloudcode-pa.googleapis.com/v1internal               |
@@ -67,13 +72,17 @@
 - **架构约束**：
   - 严禁在中间件中进行慢 I/O 操作或非必要的数据库查询。
   - 所有跨路由状态（`AppState`）必须采用 `Arc<T>` 封装，内部状态若需变更应优先使用无锁结构（如 `dashmap::DashMap`、`atomic::*`）或细粒度 `RwLock`。
+  - **Codex WebSocket 协议支持**：支持 `/v1/responses` 与 `/responses` 端点，建立连接后必须立即下发 `response.created` 初始帧，防止客户端因探测超时反复触发重连；针对客户端主动断开连接，显式标记为 `499 Client Closed Request`，避免虚假记入系统内部 500 错误。
 
 ### 2.2 TokenManager (核心大脑)
 - **职责范围**：
-  1. **账号调度**：根据目标模型（如 `gemini-2.5-pro`、`claude-3-7-sonnet`）在多账号间执行最优负载均衡算法。
+  1. **零拷贝高性能调度**：
+     - `tokens` 结构采用 `Arc<DashMap<String, Arc<ProxyToken>>>`，调度过滤与选号全流程传递引用，消除高频深拷贝。
+     - 配额保护开关通过 `AtomicBool` 内存快照原子读取，彻底杜绝在调度热路径上调用 `load_app_config()` 读取磁盘。
+     - 账号绑定的 `machine_id` 在加载时预解析并存入 `ProxyToken`，调度后直接透传给上游请求，消除了每个请求读取账号 JSON 的开销。
   2. **OAuth 刷新防击穿**：
      - 当 Token 过期（或在 5 分钟缓冲期内）时，触发刷新。
-     - **必须采用并发防击穿模式**：同一账号在任意时刻仅允许一个异步协程发起 Google OAuth Refresh 请求，其余等待协程通过广播通知获取最新 Token，严禁并发并发刷新导致 OAuth Refresh Token 报废。
+     - **必须采用并发防击穿模式**：同一账号在任意时刻仅允许一个异步协程发起 Google OAuth Refresh 请求，其余等待协程通过广播通知获取最新 Token，严禁并发刷新导致 OAuth Refresh Token 报废。
   3. **实时限流熔断与自愈**：
      - 捕获上游 429 或 `QUOTA_EXHAUSTED` 错误，自动将当前账号+模型加入 `live_limited_models` 冷却表，并计算 `reset_time`。
      - 在冷却到期前，调度器自动跳过该账号，转而调度池中可用备用账号。
@@ -82,6 +91,9 @@
 - **职责范围**：负责对抗上游的反爬与协议风控。
 - **关键机制**：
   - **TLS 仿真**：使用 `rquest` 库固定 `Emulation::Chrome123`，严格对齐浏览器的 Client Hello、密码套件与扩展顺序。
+  - **请求体单次序列化与引用共享**：
+    - 在进入三级端点 Fallback 重试循环之前，预先调用 `serde_json::to_vec` 转换为 `bytes::Bytes`。
+    - 循环内的各端点重试仅 Clone `Bytes` 引用计数指针，严禁在重试循环内反复序列化 JSON 或进行大内存拷贝。
   - **请求头清洗与脱敏**：
     - 注入官方关键特征头：`x-client-name: antigravity`、`x-client-version`、`x-machine-id`、`x-vscode-sessionid`。
     - 所有上游 POST（含 `streamGenerateContent`、图片生成）请求体统一先序列化为字节再发送确定 `Content-Length`，禁止 `wrap_stream` 产生 chunked 请求体；`streamGenerateContent` 的流式仅体现在 SSE 响应方向。

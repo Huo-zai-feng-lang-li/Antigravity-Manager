@@ -3,6 +3,43 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.6 (2026-09-11)**:
+        -   **[Proxy Hot Path Performance] Zero-Copy Token Dispatch & Memory-Mapped State**:
+            -   **Zero-Copy Token Scheduling**: Refactored `TokenManager.tokens` to `Arc<DashMap<String, Arc<ProxyToken>>>`, enabling reference-borrowed inspection across candidate filtering and P2C dispatch, eliminating `ProxyToken` clone overhead on every request.
+            -   **Snapshot In-Memory Config**: Replaced synchronous `load_app_config()` disk reads on request hot paths with atomic `AtomicBool` flags and `RwLock` in-memory snapshots, establishing real-time synchronization on config updates.
+            -   **Cached Device Fingerprint Pass-Through**: Pre-parsed and cached `machine_id` during account initialization and explicitly passed it through all protocol handlers (OpenAI, Claude, Gemini, Audio, Warmup), eliminating redundant disk lookups and regex parsing per request.
+        -   **[Network & Serialization Optimization] Single-Pass Request Body Serialization**:
+            -   **External Loop Serialization**: Serialized upstream request payloads into `bytes::Bytes` outside retry loops, allowing fallback attempts across accounts to share immutable memory buffers with zero payload duplication.
+        -   **[Test Suite Stability] Concurrency Isolation & Mutex-Protected SQLite**:
+            -   **Thread-Local Config Isolation**: Isolated `ThinkingBudgetConfig` test states via `thread_local!`, preventing state pollution across parallel test executions.
+            -   **Reentrant SQLite Test Mutex**: Introduced `TEST_SECURITY_MUTEX` (`parking_lot::ReentrantMutex`) to serialize SQLite security database operations in tests, completely resolving flaky `database is locked` errors.
+    *   **v4.7.5 (2026-09-11)**:
+        -   **[WebSocket Resilience & Session Context] 499 Client Closed Marking & Context Preservation**:
+            -   **HTTP 499 Tagging**: Accurately flags aborted connections (`finalized_ok = false`) with HTTP status 499 (Client Closed Request) in monitor logs rather than dropping them or logging false 500 errors.
+            -   **Cross-Turn Tool Call State Retention**: Persists pending tool call IDs and completed outputs in `translation_state` even when client disconnects, preventing lost conversation context on subsequent turns.
+        -   **[Token Accounting & Serialization Safety] Relaxed Output Guards & Response Size Gates**:
+            -   **Defensive Token Metering**: Relaxed empty output validation in account token accounting, ensuring robust metering even when upstream providers omit usage metadata.
+            -   **Gated Response Serialization**: Added protective bounds on monitoring serialization to prevent high-memory overhead on oversized stream responses.
+    *   **v4.7.4 (2026-09-11)**:
+        -   **[Codex WebSocket Telemetry] End-to-End Traffic Logging (P1-P5)**:
+            -   **Complete Lifecycle Telemetry**: Closed the loop on WebSocket protocol traffic logging, model tagging, and token counting from handshake through streaming to connection teardown.
+        -   **[CI/CD Workflow] Streamlined Builds & Restored Caching**:
+            -   **Windows Build Acceleration**: Streamlined GitHub Actions build matrices for faster Windows standalone packaging and fixed `rust-cache` directory mapping across 459 crates.
+    *   **v4.7.3 (2026-09-10)**:
+        -   **[Codex WebSocket Optimization] Immediate response.created Frame Prevents Reconnecting**:
+            -   **Instant Handshake Confirmation**: Immediately dispatches `response.created` upon receiving `response.create`, eliminating waits for upstream first-chunk peek. Prevents client 15-second connect timeouts and `Reconnecting 1/5~5/5` cycles on high-effort reasoning models or slow socks5h proxies.
+            -   **WS Error Protocol Status Alignment**: Injected top-level numerical `status` field into WebSocket error frames for proper client error recognition; extracted `build_ws_created_event` and `build_ws_error_event` helper functions with unit test coverage.
+        -   **[UI & Navigation Polish] Tabular Numeric Stats & Sticky Header Navigation**:
+            -   **High-Contrast Traffic Stats**: Enlarged and bolded total/ok/error counts with monospace `tabular-nums` in traffic monitor bar.
+            -   **Sticky Sub-Navigation**: Made settings secondary navigation tabs and save actions sticky with horizontal scrolling for compact views.
+    *   **v4.7.2 (2026-09-10)**:
+        -   **[Codex Protocol Compatibility] Direct WebSocket Route on /responses**:
+            -   **Root Route Support**: Added `.get(handle_responses_websocket)` to `/responses`, supporting native Codex clients connecting directly to `ws://host:8045/responses` without `/v1` prefix and avoiding 405 Method Not Allowed retries.
+        -   **[Code Quality] Rustfmt Uniform Formatting**:
+            -   **Formatting Cleanups**: Resolved rustfmt line-wrapping and indentation inconsistencies across 12 files, ensuring 100% clean passes on `cargo fmt --check`.
+    *   **v4.7.1 (2026-09-10)**:
+        -   **[Traffic Monitor Fix] Exclude 101 Switching Protocols from Errors**:
+            -   **1xx Informational Status Classification**: Corrected HTTP status 101 WebSocket upgrades being misclassified as errors in `proxy/monitor.rs`, `proxy_db.rs`, and frontend dashboards (`ProxyMonitor.tsx`, `MiniView.tsx`, `IpAccessLogs.tsx`).
     *   **v4.7.0 (2026-09-10)**:
         -   **[Session & Proxy Fix] Prevent 400 Errors and Account Freezes from Upstream 1M Token Accumulation (PR #3415, Issue #3411, refs #3325)**:
             -   **Scoped Session IDs per Conversation**: Replaced the account-email-only upstream `sessionId` hash with a scoped derivation combining `account_id`, conversation fingerprint, and a generation counter. Keeps upstream Prompt Cache hits stable within the same dialogue while strictly isolating different conversations from sharing one server-side session.

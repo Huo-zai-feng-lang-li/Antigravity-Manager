@@ -3,6 +3,43 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.7.6 (2026-09-11)**:
+        -   **[反代核心性能重构] 调度热路径消除磁盘 I/O 与深拷贝**:
+            -   **Token 调度零拷贝借用**: 将 `TokenManager.tokens` 重构为 `Arc<DashMap<String, Arc<ProxyToken>>>`，在候选 Token 筛选与 P2C 调度遍历中实现全链路引用借用，彻底消除每次请求高频遍历时的 `ProxyToken` 结构体深拷贝开销。
+            -   **配置热更新内存快照化**: 消除请求热路径上的 `load_app_config()` 同步磁盘文件 I/O，重构为 `AtomicBool` 与 `RwLock` 内存快照原子读取配额保护与熔断状态，并在配置变更入口建立即时同步机制。
+            -   **设备指纹内存预解析与跨协议透传**: 在账号载入时完成 `machine_id` 内存预解析与缓存，在各协议 Handler（OpenAI/Claude/Gemini/Audio/Warmup）中显式透传，消除了高频重复的磁盘读取与正则解析。
+        -   **[网络传输与序列化优化] 上游单次序列化与 Payload 内存共享**:
+            -   **Fallback 循环外部预序列化**: 在上游账号重试与降级循环外部预先序列化请求体为 `bytes::Bytes`，重试切换账号仅增加内存引用计数，消除重复 JSON 编码与深拷贝开销。
+        -   **[测试套件稳定性工程] 并发测试环境隔离与数据库死锁根除**:
+            -   **Thinking 配置线程级隔离**: 使用 `thread_local!` 隔离 `ThinkingBudgetConfig` 测试状态，彻底消除多线程并发测试中的状态竞争污染。
+            -   **SQLite 安全审计库重入互斥锁**: 引入 `TEST_SECURITY_MUTEX`（`parking_lot::ReentrantMutex`）串行化测试环境中的 SQLite 数据库事务，根除高并发测试下的 `database is locked` Flaky 测试隐患。
+    *   **v4.7.5 (2026-09-11)**:
+        -   **[WebSocket 健壮性与会话上下文] 客户端主动断开标记 499 并保留会话上下文**:
+            -   **精准识别 499 状态**: 当客户端非正常断开（`finalized_ok = false`）时，流量监控准确记录 HTTP 状态码 499 (Client Closed Request) 而非静默丢弃或误报 500。
+            -   **跨轮次工具调用状态持久化**: 无论连接是否正常完成，均妥善保存 `translation_state` 中的已生成工具调用 ID 与输出上下文，防止重新发起对话时丢失上一轮会话状态。
+        -   **[Token 统计与序列化安全] 账户 Token 统计放宽 output 守卫与序列化门控**:
+            -   **防御性 Token 累计**: 放宽账户 Token 监控中对 output 为空的校验，确保上游未返回 usage 时仍能安全累计。
+            -   **响应体序列化内存门控**: 在监控中间件响应体序列化环节引入安全保护，防止异常大响应序列化引发内存溢出。
+    *   **v4.7.4 (2026-09-11)**:
+        -   **[Codex WebSocket 链路统计] 全链路流量日志闭环 (P1-P5)**:
+            -   **全生命周期流量日志闭环**: 完善 WebSocket 协议各生命周期的流量日志记录、模型标识与 Token 计数，打通从握手、流式推送到连接关闭的全生命周期监控闭环。
+        -   **[CI/CD 构建优化] 精简非 Windows 构建与优化 Release 缓存**:
+            -   **构建流水线加速**: 优化 GitHub Actions 构建工作流，精简矩阵提升 Windows 独立安装包打包反馈效率，修复 `rust-cache` 缓存映射恢复 459 个 crate 的增量构建缓存。
+    *   **v4.7.3 (2026-09-10)**:
+        -   **[Codex WebSocket 协议优化] 首帧立即下发 response.created 根除 Reconnecting**:
+            -   **握手即时确认**: 收到 `response.create` 请求后立即下发 `response.created` 确认帧，不再阻塞等待上游首个有效数据块。彻底解决长思考（Reasoning / High-effort）或经 socks5h 上游代理时因超过 Codex 15s 首响应超时导致的反复重连（`Reconnecting 1/5~5/5`）断连问题。
+            -   **WS 错误协议对齐**: 补齐 WS 错误帧顶层数值型 `status` 字段，避免 Codex 客户端在非 2xx 时将其误判为空闲超时而静默挂起；抽取 `build_ws_created_event` 与 `build_ws_error_event` 纯函数并增加单测。
+        -   **[UI 交互与排版优化] 监控面板数字排版与设置页二级导航吸顶**:
+            -   **监控统计字体优化**: 流量日志统计条总计/正常/错误数字加大加粗并采用等宽数字字体（`tabular-nums`），提升视觉可读性。
+            -   **设置页二级导航 Sticky 吸顶**: 设置页二级导航（通用/账号/代理等）与保存按钮支持 Sticky 吸顶，窄屏下可平滑横向滚动。
+    *   **v4.7.2 (2026-09-10)**:
+        -   **[Codex 协议兼容] /responses 根路由支持 WebSocket 直连握手**:
+            -   **根路由兼容支持**: 为 `/responses` 路由添加 `.get(handle_responses_websocket)`，完美兼容 Codex 原生客户端直连（`ws://host:8045/responses`，无 `/v1` 前缀），避免因只支持 POST 导致 405 Method Not Allowed 并反复重试。
+        -   **[代码规范] 修复 Rustfmt 格式规范问题**:
+            -   **格式统一**: 修复 12 个文件的 rustfmt 格式缩进与换行，确保 CI 全平台 `cargo fmt --check` 严格通过。
+    *   **v4.7.1 (2026-09-10)**:
+        -   **[流量监控与状态码修复] 101 Switching Protocols 误统计为错误**:
+            -   **1xx 信息性状态码白名单**: 修复 101 WebSocket 握手升级状态码被误判定为 `<400` 失败的问题，修正 `proxy/monitor.rs`、`proxy_db.rs` 的 SQL 聚合逻辑，同步更新前端 `ProxyMonitor.tsx`、`MiniView.tsx`、`IpAccessLogs.tsx` 的状态码高亮与统计展示。
     *   **v4.7.0 (2026-09-10)**:
         -   **[会话与代理修复] 修复会话级累计 Token 突破 100 万上限导致账号瘫痪与 400 报错 (PR #3415, Issue #3411, refs #3325)**:
             -   **对话级隔离与作用域 Session ID**: 改变此前上游 `sessionId` 纯由账号 ID/邮箱哈希生成的机制（导致同账号下所有对话在服务端共享单一 Session 并在长工具调用中累计输入 Token 突破 1,048,576 限制报 400）。现将 `account_id`、对话指纹（`fingerprint`）与代数计数器（`generation`）组合派生，同一对话内保持稳定（保留上游 Prompt Cache 缓存命中收益），不同对话间相互隔离。

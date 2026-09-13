@@ -270,26 +270,31 @@ pub(crate) fn record_user_token_usage(
     user_agent: Option<String>,
 ) {
     if let Some(identity) = user_token_identity {
-        let _ = crate::modules::user_token_db::record_token_usage_and_ip(
-            &identity.token_id,
-            log.client_ip.as_deref().unwrap_or("127.0.0.1"),
-            log.model.as_deref().unwrap_or("unknown"),
-            log.input_tokens.unwrap_or(0) as i32,
-            log.output_tokens.unwrap_or(0) as i32,
-            log.status as u16,
-            user_agent,
-        );
-
-        // 额度校正/回滚：成功请求按实际用量多退少补，失败请求全额回滚预占量
-        let actual_used =
-            log.input_tokens.unwrap_or(0) as i64 + log.output_tokens.unwrap_or(0) as i64;
-        if let Ok(conn) = crate::modules::user_token_db::connect_db() {
-            let _ = crate::modules::user_token_db::settle_quota_usage(
+        // 复用同一连接完成"用量记录 + 额度结算"，避免每请求打开两个 SQLite 连接
+        if let Ok(mut conn) = crate::modules::user_token_db::connect_db() {
+            let _ = crate::modules::user_token_db::record_token_usage_and_ip_with_conn(
+                &mut conn,
                 &identity.token_id,
-                actual_used,
+                log.client_ip.as_deref().unwrap_or("127.0.0.1"),
+                log.model.as_deref().unwrap_or("unknown"),
+                log.input_tokens.unwrap_or(0) as i32,
+                log.output_tokens.unwrap_or(0) as i32,
                 log.status as u16,
-                &conn,
+                user_agent,
             );
+
+            // 额度校正/回滚：仅当本次请求确实预占过额度时才结算，严格 hold-settle 配对。
+            // 零消耗端点（模型列表/计数/握手）未预占，若结算会误扣上一轮的预占量。
+            if identity.quota_held {
+                let actual_used =
+                    log.input_tokens.unwrap_or(0) as i64 + log.output_tokens.unwrap_or(0) as i64;
+                let _ = crate::modules::user_token_db::settle_quota_usage(
+                    &identity.token_id,
+                    actual_used,
+                    log.status as u16,
+                    &conn,
+                );
+            }
         }
     }
 }

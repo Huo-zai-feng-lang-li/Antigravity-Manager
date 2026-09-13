@@ -37,6 +37,10 @@ interface UserTokenStats {
 
 // interface CreateTokenRequest omitted as it's not explicitly used for typing variables
 
+// 额度预占量：必须与 Rust 后端 user_token_db.rs 的 QUOTA_HOLD_AMOUNT 保持一致。
+// 非零额度若小于该值，单个请求在预占阶段就会被拒（完全不可用），故前端提前阻止提交。
+const QUOTA_HOLD_AMOUNT = 8192;
+
 const UserToken: React.FC = () => {
     const { t } = useTranslation();
     const [tokens, setTokens] = useState<UserToken[]>([]);
@@ -101,13 +105,13 @@ const UserToken: React.FC = () => {
             return;
         }
 
-        // 验证额度：非零额度必须 >= 8192（预占量），否则 Token 完全不可用
-        if (newDailyQuota > 0 && newDailyQuota < 8192) {
-            showToast('每日额度不能小于 8192（或设为 0 不限制）', 'error');
+        // 验证额度：非零额度必须 >= 预占量，否则 Token 完全不可用
+        if (newDailyQuota > 0 && newDailyQuota < QUOTA_HOLD_AMOUNT) {
+            showToast(`每日额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
         }
-        if (newMonthlyQuota > 0 && newMonthlyQuota < 8192) {
-            showToast('每月额度不能小于 8192（或设为 0 不限制）', 'error');
+        if (newMonthlyQuota > 0 && newMonthlyQuota < QUOTA_HOLD_AMOUNT) {
+            showToast(`每月额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
         }
 
@@ -180,13 +184,13 @@ const UserToken: React.FC = () => {
             return;
         }
 
-        // 验证额度：非零额度必须 >= 8192（预占量），否则 Token 完全不可用
-        if (editDailyQuota > 0 && editDailyQuota < 8192) {
-            showToast('每日额度不能小于 8192（或设为 0 不限制）', 'error');
+        // 验证额度：非零额度必须 >= 预占量，否则 Token 完全不可用
+        if (editDailyQuota > 0 && editDailyQuota < QUOTA_HOLD_AMOUNT) {
+            showToast(`每日额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
         }
-        if (editMonthlyQuota > 0 && editMonthlyQuota < 8192) {
-            showToast('每月额度不能小于 8192（或设为 0 不限制）', 'error');
+        if (editMonthlyQuota > 0 && editMonthlyQuota < QUOTA_HOLD_AMOUNT) {
+            showToast(`每月额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
         }
 

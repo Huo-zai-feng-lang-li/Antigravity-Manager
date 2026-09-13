@@ -67,6 +67,7 @@ async fn auth_middleware_internal(
                         token_id: user_token.id,
                         token: user_token.token,
                         username: user_token.username,
+                        quota_held: false, // Off 模式不预占额度
                     };
                     let (mut parts, body) = request.into_parts();
                     parts.extensions.insert(identity);
@@ -130,36 +131,35 @@ async fn auth_middleware_internal(
             .unwrap_or_else(|| "127.0.0.1".to_string()); // Default fallback
 
         // 验证 Token
-        match crate::modules::user_token_db::validate_token(token, &client_ip) {
-            Ok((true, _)) => {
-                // Token 有效，查询信息以便传递
-                if let Ok(Some(user_token)) =
-                    crate::modules::user_token_db::get_token_by_value(token)
-                {
-                    let identity = UserTokenIdentity {
-                        token_id: user_token.id,
-                        token: user_token.token,
-                        username: user_token.username,
-                    };
+        // 零消耗端点（模型列表/计数/埋点/预热）只校验身份，不预占额度，避免额度被无谓冻结/泄漏
+        let hold_quota = !is_zero_consumption_endpoint(&method, &path);
+        match crate::modules::user_token_db::validate_token(token, &client_ip, hold_quota) {
+            Ok((true, _, Some(user_token))) => {
+                // validate 已带出查到的 token，直接构造身份，免二次查询
+                let identity = UserTokenIdentity {
+                    token_id: user_token.id,
+                    token: user_token.token,
+                    username: user_token.username,
+                    quota_held: hold_quota,
+                };
 
-                    // [FIX] 将身份信息注入到请求 extensions 中，而不是响应
-                    // 这样 monitor_middleware 在处理请求时就能获取到 identity
-                    // 因为中间件执行顺序：auth (外层) -> monitor (内层) -> handler
-                    // 响应返回时：handler -> monitor -> auth
-                    // 如果注入到 response，monitor 执行时 identity 还不存在
-                    let (mut parts, body) = request.into_parts();
-                    parts.extensions.insert(identity);
-                    let request = Request::from_parts(parts, body);
+                // [FIX] 将身份信息注入到请求 extensions 中，而不是响应
+                // 这样 monitor_middleware 在处理请求时就能获取到 identity
+                // 因为中间件执行顺序：auth (外层) -> monitor (内层) -> handler
+                // 响应返回时：handler -> monitor -> auth
+                // 如果注入到 response，monitor 执行时 identity 还不存在
+                let (mut parts, body) = request.into_parts();
+                parts.extensions.insert(identity);
+                let request = Request::from_parts(parts, body);
 
-                    // 执行请求
-                    let response = next.run(request).await;
+                // 执行请求
+                let response = next.run(request).await;
 
-                    Ok(response)
-                } else {
-                    Err(StatusCode::UNAUTHORIZED)
-                }
+                Ok(response)
             }
-            Ok((false, reason)) => {
+            // valid=true 却未带出 token 理论不可达，防御性按未授权处理
+            Ok((true, _, None)) => Err(StatusCode::UNAUTHORIZED),
+            Ok((false, reason, _)) => {
                 let reason_str = reason.unwrap_or_else(|| "Access denied".to_string());
                 tracing::warn!("UserToken rejected: {}", reason_str);
                 let body = serde_json::json!({
@@ -190,6 +190,29 @@ async fn auth_middleware_internal(
 
 fn is_health_check_path(path: &str) -> bool {
     matches!(path, "/healthz" | "/api/health" | "/health")
+}
+
+/// 判断是否为"零 token 消耗"端点：只校验身份，不预占额度。
+/// 这些端点不调用上游模型生成（模型列表/计数/埋点/预热），预占只会无谓冻结额度；
+/// 其中 event_logging 被 monitor 中间件跳过结算，若预占会一直泄漏到周期翻转。
+fn is_zero_consumption_endpoint(method: &axum::http::Method, path: &str) -> bool {
+    // 埋点上报、内部预热：不经过模型
+    if path.contains("event_logging") || path.contains("/internal/warmup") {
+        return true;
+    }
+    // token 计数端点：只计算不生成
+    if path.ends_with("count_tokens") || path.ends_with("countTokens") {
+        return true;
+    }
+    // GET 模型列表/详情不消耗（注意：POST /v1beta/models/:model 是 generateContent，仍需预占）
+    // GET /v1/responses、/responses 是 WebSocket 握手，本身不消耗；真实用量按每轮对话在 handler 内预占
+    method == axum::http::Method::GET
+        && (path == "/v1/models"
+            || path == "/v1/models/claude"
+            || path == "/v1beta/models"
+            || path == "/v1/responses"
+            || path == "/responses"
+            || path.starts_with("/v1beta/models/"))
 }
 
 fn should_bypass_auth(force_strict: bool, effective_mode: &ProxyAuthMode, path: &str) -> bool {
@@ -228,6 +251,8 @@ pub struct UserTokenIdentity {
     #[allow(dead_code)] // 保留原始 token 便于审计/调试
     pub token: String,
     pub username: String,
+    /// 本次请求是否真的执行了额度预占；settle 只能在为 true 时执行，严格 hold-settle 配对
+    pub quota_held: bool,
 }
 
 #[cfg(test)]

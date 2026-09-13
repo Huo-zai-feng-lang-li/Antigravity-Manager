@@ -5763,6 +5763,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                     token_id: token_info.id,
                     token: token_str.to_string(),
                     username: token_info.username,
+                    quota_held: false, // 握手不预占；每轮对话开始时单独预占并置 true
                 }),
                 _ => None,
             }
@@ -5920,6 +5921,36 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             .get("model")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        // 每轮对话独立预占额度：WebSocket 握手阶段不预占（零消耗），
+        // 这里按轮次 hold，结束时由 record_user_token_usage 内的 settle 严格配对结算。
+        let turn_identity = match &user_token_identity {
+            Some(identity) => {
+                match crate::modules::user_token_db::hold_quota_for_token(&identity.token_id) {
+                    Ok(true) => {
+                        let mut held = identity.clone();
+                        held.quota_held = true;
+                        Some(held)
+                    }
+                    Ok(false) => {
+                        // 额度超限：不转发上游，直接下发 403 错误事件
+                        let error_ev = build_ws_error_event(
+                            403,
+                            "insufficient_quota",
+                            "Token daily/monthly quota exceeded.".to_string(),
+                        );
+                        let _ = socket.send(Message::Text(error_ev.to_string())).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        // 数据库异常不阻断请求，但本轮不结算（quota_held 保持 false，避免误扣）
+                        tracing::error!("WebSocket hold quota failed: {}", e);
+                        Some(identity.clone())
+                    }
+                }
+            }
+            None => None,
+        };
         // [FIX] 仅当监控开启或存在用户令牌（需要用量统计）时才序列化请求体，
         // 避免 Codex 大上下文在无观测需求时产生无谓的 CPU/内存开销。
         let openai_body_str = if state.monitor.is_enabled() || user_token_identity.is_some() {
@@ -5985,7 +6016,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                     protocol: Some("openai".to_string()),
                     username: user_token_identity.as_ref().map(|i| i.username.clone()),
                 };
-                record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
+                record_user_token_usage(&turn_identity, &err_log, user_agent.clone());
                 let _ = state.monitor.log_request(err_log).await;
                 continue;
             }
@@ -6028,7 +6059,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 protocol: Some("openai".to_string()),
                 username: user_token_identity.as_ref().map(|i| i.username.clone()),
             };
-            record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
+            record_user_token_usage(&turn_identity, &err_log, user_agent.clone());
             let _ = state.monitor.log_request(err_log).await;
             continue;
         }
@@ -6170,7 +6201,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             username: user_token_identity.as_ref().map(|i| i.username.clone()),
         };
 
-        record_user_token_usage(&user_token_identity, &success_log, user_agent.clone());
+        record_user_token_usage(&turn_identity, &success_log, user_agent.clone());
         let _ = state.monitor.log_request(success_log).await;
 
         if finalized_ok {

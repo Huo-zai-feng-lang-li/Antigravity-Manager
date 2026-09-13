@@ -401,9 +401,8 @@ pub fn list_tokens() -> Result<Vec<UserToken>, String> {
     Ok(tokens)
 }
 
-/// 获取单个令牌信息
-pub fn get_token_by_id(id: &str) -> Result<Option<UserToken>, String> {
-    let conn = connect_db()?;
+/// 获取单个令牌信息（使用传入连接）
+pub fn get_token_by_id_with_conn(id: &str, conn: &Connection) -> Result<Option<UserToken>, String> {
     let mut stmt = conn
         .prepare("SELECT * FROM user_tokens WHERE id = ?1")
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -438,6 +437,12 @@ pub fn get_token_by_id(id: &str) -> Result<Option<UserToken>, String> {
         .map_err(|e| format!("Failed to query token: {}", e))?;
 
     Ok(token)
+}
+
+/// 获取单个令牌信息（生产入口，自行打开连接）
+pub fn get_token_by_id(id: &str) -> Result<Option<UserToken>, String> {
+    let conn = connect_db()?;
+    get_token_by_id_with_conn(id, &conn)
 }
 
 /// 根据 Token 值获取令牌信息
@@ -715,7 +720,10 @@ pub fn get_token_ips(token_id: &str) -> Result<Vec<TokenIpBinding>, String> {
 }
 
 /// 记录/更新令牌使用情况 (同时处理 user_tokens 和 token_ip_bindings)
-pub fn record_token_usage_and_ip(
+/// 使用外部传入的连接，便于与额度结算复用同一连接
+#[allow(clippy::too_many_arguments)]
+pub fn record_token_usage_and_ip_with_conn(
+    conn: &mut Connection,
     token_id: &str,
     ip: &str,
     model: &str,
@@ -724,7 +732,6 @@ pub fn record_token_usage_and_ip(
     status: u16,
     user_agent: Option<String>,
 ) -> Result<(), String> {
-    let mut conn = connect_db()?;
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed to create transaction: {}", e))?;
@@ -794,6 +801,30 @@ pub fn record_token_usage_and_ip(
     Ok(())
 }
 
+/// 记录/更新令牌使用情况（生产入口，自行打开连接）
+#[allow(clippy::too_many_arguments)]
+pub fn record_token_usage_and_ip(
+    token_id: &str,
+    ip: &str,
+    model: &str,
+    input_tokens: i32,
+    output_tokens: i32,
+    status: u16,
+    user_agent: Option<String>,
+) -> Result<(), String> {
+    let mut conn = connect_db()?;
+    record_token_usage_and_ip_with_conn(
+        &mut conn,
+        token_id,
+        ip,
+        model,
+        input_tokens,
+        output_tokens,
+        status,
+        user_agent,
+    )
+}
+
 /// 计算当前周期锚点时间戳（北京时间 UTC+8，与宵禁时区一致）
 /// 返回 (今日北京时间 00:00 的 UTC 秒, 本月 1 日北京时间 00:00 的 UTC 秒)
 fn quota_period_anchors(now: chrono::DateTime<Utc>) -> (i64, i64) {
@@ -817,21 +848,6 @@ fn quota_period_anchors(now: chrono::DateTime<Utc>) -> (i64, i64) {
     let monthly_anchor = month_start.timestamp();
 
     (daily_anchor, monthly_anchor)
-}
-
-/// 确保 user_tokens 表存在（防御性：数据库文件被意外删除/重建后自动恢复）
-fn ensure_quota_table_exists(conn: &Connection) -> Result<(), String> {
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_tokens'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    if count == 0 {
-        init_db()?;
-    }
-    Ok(())
 }
 
 /// 额度预占：请求进入时原子冻结 QUOTA_HOLD_AMOUNT，防止并发超发。
@@ -897,6 +913,25 @@ fn hold_quota(token: &UserToken, conn: &Connection) -> Result<(bool, Option<Stri
     Ok((true, None))
 }
 
+/// 按 token_id 执行一次额度预占（使用传入连接，便于测试）。
+/// 返回 Ok(true)=通过（含不限额度），Ok(false)=超限或 token 不存在，Err=数据库错误。
+pub fn hold_quota_for_token_with_conn(token_id: &str, conn: &Connection) -> Result<bool, String> {
+    let token = match get_token_by_id_with_conn(token_id, conn)? {
+        Some(t) => t,
+        None => return Ok(false),
+    };
+    let (ok, _reason) = hold_quota(&token, conn)?;
+    Ok(ok)
+}
+
+/// 按 token_id 执行一次额度预占（生产入口，自行打开连接）。
+/// 供 WebSocket 长连接的每轮对话调用：握手阶段不预占，每轮真实请求开始时调用本函数、
+/// 结束时调用 settle_quota_usage。
+pub fn hold_quota_for_token(token_id: &str) -> Result<bool, String> {
+    let conn = connect_db()?;
+    hold_quota_for_token_with_conn(token_id, &conn)
+}
+
 /// 额度校正/回滚：响应结束后调用。
 /// - 成功请求（status < 400）：按实际用量多退少补（差值 = 实际 - 预占）
 /// - 失败请求（status >= 400）：全额回滚预占量
@@ -910,38 +945,6 @@ pub fn settle_quota_usage(
     let now = Utc::now();
     let (daily_anchor_now, monthly_anchor_now) = quota_period_anchors(now);
 
-    // 读取当前 anchor 和 quota，判断是否跨周期 / 是否完全不限
-    let (daily_anchor, monthly_anchor, daily_quota, monthly_quota): (
-        Option<i64>,
-        Option<i64>,
-        i64,
-        i64,
-    ) = match conn.query_row(
-        "SELECT daily_anchor, monthly_anchor, daily_quota, monthly_quota FROM user_tokens WHERE id = ?1",
-        params![token_id],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get::<_, i64>(2).unwrap_or(0),
-                row.get::<_, i64>(3).unwrap_or(0),
-            ))
-        },
-    ) {
-        Ok(v) => v,
-        Err(_) => return Ok(()), // token 不存在或已删除，忽略
-    };
-
-    // 完全不限（日/月额度均为 0）：hold_quota 未预占，无需校正，避免污染 used
-    if daily_quota == 0 && monthly_quota == 0 {
-        return Ok(());
-    }
-
-    // 跨周期：跳过校正，预占留在旧周期自然过期
-    if daily_anchor != Some(daily_anchor_now) || monthly_anchor != Some(monthly_anchor_now) {
-        return Ok(());
-    }
-
     let hold = QUOTA_HOLD_AMOUNT;
     let delta = if status >= 400 {
         -hold // 失败：全额回滚
@@ -949,23 +952,34 @@ pub fn settle_quota_usage(
         actual_used - hold // 成功：多退少补
     };
 
+    // 单条原子结算，省去前置 SELECT：仅当"至少一个额度有限"且"日/月锚点都仍处于当前
+    // 周期（说明本周期确实由本次请求预占过）"时才落 delta；否则（双 0 不限 / 跨日或跨月 /
+    // 从未预占）WHERE 不匹配、affected=0，自然跳过，不会污染 used，也不会出现负数。
     conn.execute(
-        "UPDATE user_tokens SET daily_used = daily_used + ?1, monthly_used = monthly_used + ?1 WHERE id = ?2",
-        params![delta, token_id],
+        "UPDATE user_tokens
+         SET daily_used = daily_used + ?1,
+             monthly_used = monthly_used + ?1
+         WHERE id = ?2
+           AND (daily_quota != 0 OR monthly_quota != 0)
+           AND daily_anchor = ?3
+           AND monthly_anchor = ?4",
+        params![delta, token_id, daily_anchor_now, monthly_anchor_now],
     )
     .map_err(|e| format!("Failed to settle quota: {}", e))?;
 
     Ok(())
 }
 
-/// 检查 Token 是否有效 (包含过期时间检查和 IP 限制检查)
-/// 检查 Token 是否有效（使用传入的连接，便于测试用内存数据库）
-/// 返回: (是否有效, 拒绝原因)
-pub fn validate_token_with_conn(
+/// 检查 Token 是否有效的核心实现（使用传入的连接，便于测试用内存数据库）
+/// hold_quota_enabled = true 时在所有前置校验通过后原子预占额度；
+/// 零消耗端点（模型列表/计数/埋点/预热）应传 false，只校验身份不预占。
+/// 返回: (是否有效, 拒绝原因, 校验通过时带出查到的令牌，供调用方免二次查询)
+fn validate_token_with_conn_hold(
     token_str: &str,
     ip: &str,
     conn: &Connection,
-) -> Result<(bool, Option<String>), String> {
+    hold_quota_enabled: bool,
+) -> Result<(bool, Option<String>, Option<UserToken>), String> {
     let token_opt = get_token_by_value_with_conn(token_str, conn)?;
 
     if let Some(token) = token_opt {
@@ -979,6 +993,7 @@ pub fn validate_token_with_conn(
                             "Your token has expired. Please contact the administrator to renew it."
                                 .to_string(),
                         ),
+                        None,
                     ));
                 }
             }
@@ -1006,7 +1021,7 @@ pub fn validate_token_with_conn(
                     .unwrap_or(0);
 
                 if current_ip_count >= token.max_ips {
-                    return Ok((false, Some(format!("IP limit reached ({}/{}). Please contact the administrator to increase the limit.", current_ip_count, token.max_ips))));
+                    return Ok((false, Some(format!("IP limit reached ({}/{}). Please contact the administrator to increase the limit.", current_ip_count, token.max_ips)), None));
                 }
             }
         }
@@ -1026,33 +1041,52 @@ pub fn validate_token_with_conn(
                 };
 
                 if is_curfew {
-                    return Ok((false, Some(format!("Service is not available between {} and {} Beijing Time (Curfew enabled). Current Beijing time: {}", start_str, end_str, current_time_str))));
+                    return Ok((false, Some(format!("Service is not available between {} and {} Beijing Time (Curfew enabled). Current Beijing time: {}", start_str, end_str, current_time_str)), None));
                 }
             }
         }
 
         // 4. 额度预占（原子冻结 QUOTA_HOLD_AMOUNT，超限则拒绝）
-        let (quota_ok, quota_reason) = hold_quota(&token, conn)?;
-        if !quota_ok {
-            return Ok((false, quota_reason));
+        // 零消耗端点（hold_quota_enabled=false）只校验身份，不预占额度
+        if hold_quota_enabled {
+            let (quota_ok, quota_reason) = hold_quota(&token, conn)?;
+            if !quota_ok {
+                return Ok((false, quota_reason, None));
+            }
         }
 
-        // 一切正常，Token 有效
-        Ok((true, None))
+        // 一切正常，Token 有效（带出已查到的 token，调用方无需再查一次）
+        Ok((true, None, Some(token)))
     } else {
         Ok((
             false,
             Some("Invalid token. Please check your API key.".to_string()),
+            None,
         ))
     }
 }
 
-/// 检查 Token 是否有效 (包含过期时间检查和 IP 限制检查)
-/// 返回: (是否有效, 拒绝原因)
-pub fn validate_token(token_str: &str, ip: &str) -> Result<(bool, Option<String>), String> {
+/// 检查 Token 是否有效并预占额度（测试/默认入口，等价于 hold=true）
+/// 仅返回 (是否有效, 拒绝原因)，不带出 token
+pub fn validate_token_with_conn(
+    token_str: &str,
+    ip: &str,
+    conn: &Connection,
+) -> Result<(bool, Option<String>), String> {
+    validate_token_with_conn_hold(token_str, ip, conn, true)
+        .map(|(valid, reason, _token)| (valid, reason))
+}
+
+/// 检查 Token 是否有效 (包含过期/IP/宵禁/额度检查)，生产入口。
+/// hold_quota_enabled：生成类请求传 true（预占额度）；零消耗端点传 false（只校验身份）。
+/// 返回 (是否有效, 拒绝原因, 校验通过时的令牌，可直接用于构造身份，免二次查询)
+pub fn validate_token(
+    token_str: &str,
+    ip: &str,
+    hold_quota_enabled: bool,
+) -> Result<(bool, Option<String>, Option<UserToken>), String> {
     let conn = connect_db()?;
-    ensure_quota_table_exists(&conn)?;
-    validate_token_with_conn(token_str, ip, &conn)
+    validate_token_with_conn_hold(token_str, ip, &conn, hold_quota_enabled)
 }
 
 /// 获取 IP 关联的用户名 (用于 IP 管理页面)
@@ -1213,6 +1247,22 @@ mod tests {
             fetched.daily_used, 0,
             "Unlimited token should not hold quota"
         );
+    }
+
+    #[test]
+    fn test_validate_no_hold_when_disabled() {
+        let conn = setup_test_conn();
+        let token = create_test_token(&conn, 20000, 0);
+        // hold=false（零消耗端点）：校验通过但不预占
+        let (valid, _, _) =
+            validate_token_with_conn_hold(&token.token, "127.0.0.1", &conn, false).unwrap();
+        assert!(valid, "Zero-consumption endpoint should pass validation");
+        let fetched = get_test_token(&conn, &token.id);
+        assert_eq!(
+            fetched.daily_used, 0,
+            "hold=false must not pre-occupy quota"
+        );
+        assert_eq!(fetched.daily_anchor, None, "hold=false must not set anchor");
     }
 
     #[test]
@@ -1479,5 +1529,63 @@ mod tests {
             fetched.monthly_used, 0,
             "Unlimited token settle must not modify monthly_used"
         );
+    }
+
+    #[test]
+    fn test_settle_without_hold_is_noop() {
+        // 回归 D6：零消耗端点不 hold（anchor 保持 NULL），此时 settle 不得扣减，更不能变负
+        let conn = setup_test_conn();
+        let token = create_test_token(&conn, 20000, 0);
+        // 故意不预占，直接结算
+        settle_quota_usage(&token.id, 0, 200, &conn).unwrap();
+        let fetched = get_test_token(&conn, &token.id);
+        assert_eq!(fetched.daily_used, 0, "settle without hold must be noop");
+        assert!(fetched.daily_used >= 0, "used must never go negative");
+    }
+
+    #[test]
+    fn test_multi_turn_hold_settle_pairs_correctly() {
+        // 回归（WebSocket 严重 bug）：长连接多轮对话必须每轮独立 hold-settle 配对。
+        // 旧实现只在握手 hold 一次、循环内每轮 settle，多轮后 used 每轮多减 8192 直至额度失效。
+        let conn = setup_test_conn();
+        let token = create_test_token(&conn, 1_000_000, 0);
+
+        // 第 1 轮：hold 8192，实际用 5000
+        let (ok1, _, held1) =
+            validate_token_with_conn_hold(&token.token, "127.0.0.1", &conn, true).unwrap();
+        assert!(ok1 && held1.is_some(), "first turn hold should pass");
+        settle_quota_usage(&token.id, 5000, 200, &conn).unwrap();
+        assert_eq!(get_test_token(&conn, &token.id).daily_used, 5000);
+
+        // 第 2 轮：再次独立 hold，实际用 7000
+        let (ok2, _, _) =
+            validate_token_with_conn_hold(&token.token, "127.0.0.1", &conn, true).unwrap();
+        assert!(ok2, "second turn hold should pass");
+        settle_quota_usage(&token.id, 7000, 200, &conn).unwrap();
+        // 正确结果 = 5000 + 7000 = 12000；若第 2 轮漏 hold 会错算成 5000 + 7000 - 8192 = 3808
+        assert_eq!(
+            get_test_token(&conn, &token.id).daily_used,
+            12000,
+            "Each turn must hold then settle; used must equal sum of actual usage"
+        );
+    }
+
+    #[test]
+    fn test_hold_quota_for_token_cases() {
+        let conn = setup_test_conn();
+        // 正常：额度充足
+        let token = create_test_token(&conn, 20000, 0);
+        assert!(hold_quota_for_token_with_conn(&token.id, &conn).unwrap());
+        assert_eq!(
+            get_test_token(&conn, &token.id).daily_used,
+            QUOTA_HOLD_AMOUNT
+        );
+
+        // 超限：再预占一次 16384，第三次 24576 > 20000 拒绝
+        assert!(hold_quota_for_token_with_conn(&token.id, &conn).unwrap());
+        assert!(!hold_quota_for_token_with_conn(&token.id, &conn).unwrap());
+
+        // token 不存在：返回 false 而非报错
+        assert!(!hold_quota_for_token_with_conn("nonexistent-id", &conn).unwrap());
     }
 }

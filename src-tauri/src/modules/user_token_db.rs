@@ -904,7 +904,7 @@ fn hold_quota(token: &UserToken, conn: &Connection) -> Result<(bool, Option<Stri
             )
             .unwrap_or((0, 0));
         let reason = format!(
-            "Token quota exceeded. Daily: {}/{}, Monthly: {}/{}",
+            "Token 额度已用尽。每日：{}/{}，每月：{}/{}",
             daily_used, token.daily_quota, monthly_used, token.monthly_quota
         );
         return Ok((false, Some(reason)));
@@ -989,10 +989,7 @@ fn validate_token_with_conn_hold(
                 if expires_at < Utc::now().timestamp() {
                     return Ok((
                         false,
-                        Some(
-                            "Your token has expired. Please contact the administrator to renew it."
-                                .to_string(),
-                        ),
+                        Some("你的 Token 已过期，请联系管理员续期。".to_string()),
                         None,
                     ));
                 }
@@ -1021,7 +1018,14 @@ fn validate_token_with_conn_hold(
                     .unwrap_or(0);
 
                 if current_ip_count >= token.max_ips {
-                    return Ok((false, Some(format!("IP limit reached ({}/{}). Please contact the administrator to increase the limit.", current_ip_count, token.max_ips)), None));
+                    return Ok((
+                        false,
+                        Some(format!(
+                            "IP 数量已达上限（{}/{}），请联系管理员提升限制。",
+                            current_ip_count, token.max_ips
+                        )),
+                        None,
+                    ));
                 }
             }
         }
@@ -1041,7 +1045,14 @@ fn validate_token_with_conn_hold(
                 };
 
                 if is_curfew {
-                    return Ok((false, Some(format!("Service is not available between {} and {} Beijing Time (Curfew enabled). Current Beijing time: {}", start_str, end_str, current_time_str)), None));
+                    return Ok((
+                        false,
+                        Some(format!(
+                            "当前处于宵禁时段（北京时间 {} - {}），暂不可用。当前北京时间：{}",
+                            start_str, end_str, current_time_str
+                        )),
+                        None,
+                    ));
                 }
             }
         }
@@ -1060,7 +1071,7 @@ fn validate_token_with_conn_hold(
     } else {
         Ok((
             false,
-            Some("Invalid token. Please check your API key.".to_string()),
+            Some("无效的 Token，请检查你的 API Key。".to_string()),
             None,
         ))
     }
@@ -1284,7 +1295,7 @@ mod tests {
         let (valid, reason) = validate_token_with_conn(&token.token, "127.0.0.1", &conn).unwrap();
         assert!(!valid, "Should reject when hold exceeds quota");
         assert!(reason.is_some());
-        assert!(reason.unwrap().contains("quota exceeded"));
+        assert!(reason.unwrap().contains("额度已用尽"));
         let fetched = get_test_token(&conn, &token.id);
         assert_eq!(
             fetched.daily_used, 0,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, HelpCircle, CalendarPlus } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, HelpCircle, CalendarPlus, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { request as invoke } from '../utils/request';
 import { showToast } from '../components/common/ToastContainer';
@@ -50,6 +50,20 @@ const QUOTA_HELP_TEXT = `填多少合适？（经验估算，非精确）
 • 100万/月 ≈ 重度个人或小团队共享
 不确定就先填大一点（如 100万），用几天看进度条再调`;
 
+// 每日/每月额度快捷预设
+const DAILY_QUOTA_PRESETS = [
+    { label: '不限', value: 0 },
+    { label: '测试 8192', value: 8192 },
+    { label: '个人 10万/天', value: 100000 },
+    { label: '重度 50万/天', value: 500000 },
+];
+const MONTHLY_QUOTA_PRESETS = [
+    { label: '不限', value: 0 },
+    { label: '10万/月', value: 100000 },
+    { label: '团队 100万/月', value: 1000000 },
+    { label: '企业 500万/月', value: 5000000 },
+];
+
 const UserToken: React.FC = () => {
     const { t } = useTranslation();
     const [tokens, setTokens] = useState<UserToken[]>([]);
@@ -69,6 +83,14 @@ const UserToken: React.FC = () => {
     const [editDailyQuota, setEditDailyQuota] = useState(0);
     const [editMonthlyQuota, setEditMonthlyQuota] = useState(0);
     const [updating, setUpdating] = useState(false);
+
+    // 删除二次确认状态
+    const [deletingToken, setDeletingToken] = useState<UserToken | null>(null);
+    const [deleting, setDeleting] = useState(false);
+    // 创建成功后暂存完整 Token（仅此一次展示完整值）
+    const [createdToken, setCreatedToken] = useState<UserToken | null>(null);
+    // 续期行内 loading
+    const [renewingId, setRenewingId] = useState<string | null>(null);
 
     // Create Form State
     const [newUsername, setNewUsername] = useState('');
@@ -131,7 +153,8 @@ const UserToken: React.FC = () => {
                 ? Math.floor(new Date(newCustomExpires).getTime() / 1000)
                 : undefined;
 
-            await invoke('create_user_token', {
+            // 后端返回完整 UserToken（含完整 token 明文），切换到成功视图供用户仅此一次复制
+            const created = await invoke<UserToken>('create_user_token', {
                 request: {
                     username: newUsername,
                     expires_type: newExpiresType,
@@ -145,16 +168,7 @@ const UserToken: React.FC = () => {
                 }
             });
             showToast(t('common.create_success') || 'Created successfully', 'success');
-            setShowCreateModal(false);
-            setNewUsername('');
-            setNewDesc('');
-            setNewExpiresType('month');
-            setNewMaxIps(0);
-            setNewCurfewStart('');
-            setNewCurfewEnd('');
-            setNewDailyQuota(0);
-            setNewMonthlyQuota(0);
-            setNewCustomExpires('');
+            setCreatedToken(created);
             loadData();
         } catch (e) {
             console.error('Failed to create token', e);
@@ -164,13 +178,21 @@ const UserToken: React.FC = () => {
         }
     };
 
-    const handleDelete = async (id: string) => {
+    // 打开删除二次确认弹窗（不再点击即删，防误删不可恢复）
+    const requestDelete = (token: UserToken) => setDeletingToken(token);
+
+    const confirmDelete = async () => {
+        if (!deletingToken) return;
+        setDeleting(true);
         try {
-            await invoke('delete_user_token', { id });
+            await invoke('delete_user_token', { id: deletingToken.id });
             showToast(t('common.delete_success') || 'Deleted successfully', 'success');
+            setDeletingToken(null);
             loadData();
         } catch (e) {
             showToast(String(e), 'error');
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -231,13 +253,48 @@ const UserToken: React.FC = () => {
     };
 
     const handleRenew = async (id: string, type: string) => {
+        setRenewingId(id);
         try {
             await invoke('renew_user_token', { id, expiresType: type });
             showToast(t('user_token.renew_success') || 'Renewed successfully', 'success');
             loadData();
         } catch (e) {
             showToast(String(e), 'error');
+        } finally {
+            // daisyUI dropdown 点选后不会自动收起，无论成败都主动 blur 关闭浮层
+            (document.activeElement as HTMLElement | null)?.blur();
+            setRenewingId(null);
         }
+    };
+
+    // 打开展示创建弹窗：清空上一次成功态与表单
+    const openCreateModal = () => {
+        setCreatedToken(null);
+        setNewUsername('');
+        setNewDesc('');
+        setNewExpiresType('month');
+        setNewMaxIps(0);
+        setNewCurfewStart('');
+        setNewCurfewEnd('');
+        setNewDailyQuota(0);
+        setNewMonthlyQuota(0);
+        setNewCustomExpires('');
+        setShowCreateModal(true);
+    };
+
+    // 关闭创建弹窗并重置成功态与表单（成功视图"完成"与表单"取消"共用）
+    const resetAndCloseCreateModal = () => {
+        setShowCreateModal(false);
+        setCreatedToken(null);
+        setNewUsername('');
+        setNewDesc('');
+        setNewExpiresType('month');
+        setNewMaxIps(0);
+        setNewCurfewStart('');
+        setNewCurfewEnd('');
+        setNewDailyQuota(0);
+        setNewMonthlyQuota(0);
+        setNewCustomExpires('');
     };
 
     const handleCopyToken = async (text: string) => {
@@ -298,7 +355,7 @@ const UserToken: React.FC = () => {
                         <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
                     </button>
                     <button
-                        onClick={() => setShowCreateModal(true)}
+                        onClick={openCreateModal}
                         className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2 shadow-sm shadow-blue-500/20"
                     >
                         <Plus size={16} />
@@ -378,7 +435,7 @@ const UserToken: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-base-200">
                         <AnimatePresence mode="popLayout">
-                            {tokens.map((token, index) => (
+                            {!loading && tokens.map((token, index) => (
                                 <motion.tr
                                     key={token.id}
                                     initial={{ opacity: 0, x: -10 }}
@@ -393,14 +450,14 @@ const UserToken: React.FC = () => {
                                                 {token.username.substring(0, 2).toUpperCase()}
                                             </div>
                                             <div>
-                                                <div className="font-semibold text-gray-900 dark:text-white uppercase tracking-wider text-xs">{token.username}</div>
-                                                <div className="text-[10px] text-gray-500">{token.description || '-'}</div>
+                                                <div className="font-semibold text-gray-900 dark:text-white uppercase tracking-wider text-sm">{token.username}</div>
+                                                <div className="text-xs text-gray-500">{token.description || '-'}</div>
                                             </div>
                                         </div>
                                     </td>
                                     <td>
                                         <div className="flex items-center gap-2 group/token">
-                                            <code className="bg-gray-50 dark:bg-base-200 px-2 py-1 rounded border border-gray-100 dark:border-base-300 text-[11px] font-mono text-gray-600 dark:text-gray-400">
+                                            <code className="bg-gray-50 dark:bg-base-200 px-2 py-1 rounded border border-gray-100 dark:border-base-300 text-xs font-mono text-gray-600 dark:text-gray-400">
                                                 {token.token.substring(0, 8)}••••••••
                                             </code>
                                             <button
@@ -412,17 +469,17 @@ const UserToken: React.FC = () => {
                                         </div>
                                     </td>
                                     <td>
-                                        <div className={`text-xs font-medium mb-1 ${getExpiresStatus(token.expires_at)}`}>
+                                        <div className={`text-sm font-medium mb-1 ${getExpiresStatus(token.expires_at)}`}>
                                             {token.expires_at ? formatTime(token.expires_at) : t('user_token.never', { defaultValue: 'Never' })}
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 rounded lowercase">
+                                            <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 rounded lowercase">
                                                 {getExpiresLabel(token.expires_type)}
                                             </span>
                                             {token.expires_at && token.expires_at < Date.now() / 1000 && (
                                                 <button
                                                     onClick={() => handleRenew(token.id, token.expires_type)}
-                                                    className="text-[10px] text-blue-500 hover:underline font-medium"
+                                                    className="text-xs text-blue-500 hover:underline font-medium"
                                                 >
                                                     {t('user_token.renew_button', { defaultValue: 'Renew' })}
                                                 </button>
@@ -430,85 +487,114 @@ const UserToken: React.FC = () => {
                                         </div>
                                     </td>
                                     <td>
-                                        <div className="text-xs font-semibold text-gray-700 dark:text-gray-300">{token.total_requests} <span className="text-[10px] font-normal text-gray-400">reqs</span></div>
-                                        <div className="text-[10px] text-gray-400 mt-0.5">
+                                        <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">{token.total_requests} <span className="text-xs font-normal text-gray-400">reqs</span></div>
+                                        <div className="text-xs text-gray-400 mt-0.5">
                                             {(token.total_tokens_used / 1000).toFixed(1)}k tokens
                                         </div>
                                     </td>
                                     <td>
                                         {token.max_ips === 0
-                                            ? <span className="px-2 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 text-[10px] rounded-full">{t('user_token.unlimited', { defaultValue: 'Unlimited' })}</span>
-                                            : <span className="px-2 py-0.5 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-[10px] font-medium rounded-full border border-orange-100 dark:border-orange-900/30">{token.max_ips} IPs</span>
+                                            ? <span className="px-2 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 text-xs rounded-full">{t('user_token.unlimited', { defaultValue: 'Unlimited' })}</span>
+                                            : <span className="px-2 py-0.5 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-xs font-medium rounded-full border border-orange-100 dark:border-orange-900/30">{token.max_ips} IPs</span>
                                         }
                                         {token.curfew_start && token.curfew_end && (
-                                            <div className="text-[10px] text-gray-400 mt-1.5 flex items-center gap-1 bg-gray-50 dark:bg-base-200 w-fit px-1.5 py-0.5 rounded">
+                                            <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-1 bg-gray-50 dark:bg-base-200 w-fit px-1.5 py-0.5 rounded">
                                                 <Clock size={10} className="text-orange-500" />
                                                 <span>{token.curfew_start} - {token.curfew_end}</span>
                                             </div>
                                         )}
                                         {(token.daily_quota > 0 || token.monthly_quota > 0) && (
                                             <div className="mt-1.5 space-y-1">
-                                                {token.daily_quota > 0 && (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="text-[10px] text-gray-400 w-4">日</span>
-                                                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                {token.daily_quota > 0 && (() => {
+                                                    const pct = Math.min(100, (token.daily_used / token.daily_quota) * 100);
+                                                    return (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="text-xs text-gray-400 w-4">日</span>
                                                             <div
-                                                                className={`h-full rounded-full transition-all ${token.daily_used / token.daily_quota >= 0.9 ? 'bg-red-500' : token.daily_used / token.daily_quota >= 0.7 ? 'bg-orange-500' : 'bg-blue-500'}`}
-                                                                style={{ width: `${Math.min(100, (token.daily_used / token.daily_quota) * 100)}%` }}
-                                                            />
+                                                                className="tooltip tooltip-right flex-1"
+                                                                data-tip={`日额度：已用 ${token.daily_used.toLocaleString()} / 总额 ${token.daily_quota.toLocaleString()}，剩余 ${Math.max(0, token.daily_quota - token.daily_used).toLocaleString()}（${pct.toFixed(1)}%）`}
+                                                            >
+                                                                <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-500' : 'bg-blue-500'}`}
+                                                                        style={{ width: `${pct}%` }}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                            <span className="text-xs text-gray-400 tabular-nums">{(token.daily_used / 1000).toFixed(1)}k/{(token.daily_quota / 1000).toFixed(1)}k</span>
                                                         </div>
-                                                        <span className="text-[10px] text-gray-400 tabular-nums">{(token.daily_used / 1000).toFixed(1)}k/{(token.daily_quota / 1000).toFixed(1)}k</span>
-                                                    </div>
-                                                )}
-                                                {token.monthly_quota > 0 && (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="text-[10px] text-gray-400 w-4">月</span>
-                                                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                    );
+                                                })()}
+                                                {token.monthly_quota > 0 && (() => {
+                                                    const pct = Math.min(100, (token.monthly_used / token.monthly_quota) * 100);
+                                                    return (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="text-xs text-gray-400 w-4">月</span>
                                                             <div
-                                                                className={`h-full rounded-full transition-all ${token.monthly_used / token.monthly_quota >= 0.9 ? 'bg-red-500' : token.monthly_used / token.monthly_quota >= 0.7 ? 'bg-orange-500' : 'bg-purple-500'}`}
-                                                                style={{ width: `${Math.min(100, (token.monthly_used / token.monthly_quota) * 100)}%` }}
-                                                            />
+                                                                className="tooltip tooltip-right flex-1"
+                                                                data-tip={`月额度：已用 ${token.monthly_used.toLocaleString()} / 总额 ${token.monthly_quota.toLocaleString()}，剩余 ${Math.max(0, token.monthly_quota - token.monthly_used).toLocaleString()}（${pct.toFixed(1)}%）`}
+                                                            >
+                                                                <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-500' : 'bg-purple-500'}`}
+                                                                        style={{ width: `${pct}%` }}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                            <span className="text-xs text-gray-400 tabular-nums">{(token.monthly_used / 1000).toFixed(1)}k/{(token.monthly_quota / 1000).toFixed(1)}k</span>
                                                         </div>
-                                                        <span className="text-[10px] text-gray-400 tabular-nums">{(token.monthly_used / 1000).toFixed(1)}k/{(token.monthly_quota / 1000).toFixed(1)}k</span>
-                                                    </div>
-                                                )}
+                                                    );
+                                                })()}
                                             </div>
                                         )}
                                     </td>
-                                    <td className="text-[10px] text-gray-400 italic">
+                                    <td className="text-xs text-gray-400 italic">
                                         {formatTime(token.created_at)}
                                     </td>
                                     <td className="text-right">
-                                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <div className="flex justify-end items-center gap-1">
                                             <button
                                                 onClick={() => handleEdit(token)}
                                                 className="p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
                                                 title={t('common.edit', { defaultValue: 'Edit' })}
                                             >
-                                                <Settings size={14} />
+                                                <Settings size={15} />
                                             </button>
                                             <div className="dropdown dropdown-end">
-                                                <label tabIndex={0} className="p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-green-500 transition-colors inline-block cursor-pointer">
-                                                    <CalendarPlus size={14} />
+                                                <label tabIndex={0} className={`p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors inline-block cursor-pointer ${renewingId === token.id ? 'text-green-500' : 'text-gray-500 hover:text-green-500'}`}>
+                                                    <CalendarPlus size={15} className={renewingId === token.id ? 'animate-spin' : ''} />
                                                 </label>
                                                 <ul tabIndex={0} className="dropdown-content z-[10] menu p-2 shadow-xl bg-white dark:bg-base-100 rounded-xl w-32 border border-gray-100 dark:border-base-200 mt-1">
-                                                    <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('user_token.renew')}</div>
-                                                    <li><a className="text-xs py-2" onClick={() => handleRenew(token.id, 'day')}>{t('user_token.expires_day', { defaultValue: '1 Day' })}</a></li>
-                                                    <li><a className="text-xs py-2" onClick={() => handleRenew(token.id, 'week')}>{t('user_token.expires_week', { defaultValue: '1 Week' })}</a></li>
-                                                    <li><a className="text-xs py-2" onClick={() => handleRenew(token.id, 'month')}>{t('user_token.expires_month', { defaultValue: '1 Month' })}</a></li>
+                                                    <div className="px-3 py-1.5 text-xs font-bold text-gray-400 uppercase tracking-widest">{t('user_token.renew')}</div>
+                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'day')}>{t('user_token.expires_day', { defaultValue: '1 Day' })}</a></li>
+                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'week')}>{t('user_token.expires_week', { defaultValue: '1 Week' })}</a></li>
+                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'month')}>{t('user_token.expires_month', { defaultValue: '1 Month' })}</a></li>
                                                 </ul>
                                             </div>
                                             <button
-                                                onClick={() => handleDelete(token.id)}
+                                                onClick={() => requestDelete(token)}
                                                 className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+                                                title={t('common.delete', { defaultValue: 'Delete' })}
                                             >
-                                                <Trash2 size={14} />
+                                                <Trash2 size={15} />
                                             </button>
                                         </div>
                                     </td>
                                 </motion.tr>
                             ))}
                         </AnimatePresence>
+                        {loading && Array.from({ length: 4 }).map((_, i) => (
+                            <tr key={`skeleton-${i}`} className="animate-pulse">
+                                {Array.from({ length: 7 }).map((__, j) => (
+                                    <td key={j} className="py-4">
+                                        <div
+                                            className="h-4 bg-gray-200 dark:bg-base-300 rounded"
+                                            style={{ width: `${40 + ((i * 13 + j * 17) % 45)}%` }}
+                                        ></div>
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
                         {tokens.length === 0 && !loading && (
                             <tr>
                                 <td colSpan={7} className="py-20">
@@ -518,7 +604,7 @@ const UserToken: React.FC = () => {
                                         </div>
                                         <p className="text-sm">{t('user_token.no_data', { defaultValue: 'No tokens found' })}</p>
                                         <button
-                                            onClick={() => setShowCreateModal(true)}
+                                            onClick={openCreateModal}
                                             className="text-xs text-blue-500 hover:underline"
                                         >
                                             {t('user_token.create', { defaultValue: 'Create your first token' })}
@@ -535,6 +621,39 @@ const UserToken: React.FC = () => {
             {showCreateModal && (
                 <div className="modal modal-open">
                     <div className="modal-box">
+                        {createdToken ? (
+                            <div className="py-2">
+                                <div className="flex flex-col items-center text-center mb-4">
+                                    <div className="w-14 h-14 rounded-full bg-green-50 dark:bg-green-900/20 flex items-center justify-center mb-3">
+                                        <CheckCircle2 className="w-7 h-7 text-green-500" />
+                                    </div>
+                                    <h3 className="font-bold text-lg mb-1">Token 创建成功</h3>
+                                    <p className="text-sm text-gray-500">请立即复制保存，关闭后将无法再次查看完整 Token</p>
+                                </div>
+                                <div className="relative bg-gray-50 dark:bg-base-200 rounded-lg p-3 pr-11 mb-3">
+                                    <code className="text-xs font-mono break-all block text-gray-800 dark:text-gray-200">{createdToken.token}</code>
+                                    <button
+                                        onClick={() => handleCopyToken(createdToken.token)}
+                                        className="absolute top-2 right-2 p-1.5 hover:bg-gray-200 dark:hover:bg-base-300 rounded-md text-gray-400 hover:text-blue-500 transition-colors"
+                                        title={t('common.copy', { defaultValue: 'Copy' })}
+                                    >
+                                        <Copy size={15} />
+                                    </button>
+                                </div>
+                                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-lg p-2.5 text-xs text-amber-700 dark:text-amber-400 mb-2">
+                                    列表中仅显示掩码，这是唯一一次查看完整 Token 的机会
+                                </div>
+                                <div className="modal-action">
+                                    <button
+                                        className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-all"
+                                        onClick={resetAndCloseCreateModal}
+                                    >
+                                        已复制，完成
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
                         <h3 className="font-bold text-lg mb-4">{t('user_token.create_title', { defaultValue: 'Create New Token' })}</h3>
 
                         <div className="form-control w-full mb-3">
@@ -653,14 +772,23 @@ const UserToken: React.FC = () => {
                             <input
                                 type="number"
                                 min={0}
-                                className="input input-bordered w-full"
+                                className={`input input-bordered w-full ${newDailyQuota > 0 && newDailyQuota < QUOTA_HOLD_AMOUNT ? 'input-error' : ''}`}
                                 value={newDailyQuota}
                                 onChange={e => setNewDailyQuota(Math.max(0, parseInt(e.target.value) || 0))}
                                 placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
                             />
-                            <label className="label">
-                                <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
-                            </label>
+                            {newDailyQuota > 0 && newDailyQuota < QUOTA_HOLD_AMOUNT ? (
+                                <label className="label"><span className="label-text-alt text-red-500">非零额度不能小于 {QUOTA_HOLD_AMOUNT}（或填 0 不限制）</span></label>
+                            ) : (
+                                <label className="label">
+                                    <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
+                                </label>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                                {DAILY_QUOTA_PRESETS.map(p => (
+                                    <button key={p.label} type="button" onClick={() => setNewDailyQuota(p.value)} className="px-2 py-0.5 text-xs border border-gray-200 dark:border-base-300 rounded-md text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors">{p.label}</button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="form-control w-full mb-3">
@@ -674,18 +802,27 @@ const UserToken: React.FC = () => {
                             <input
                                 type="number"
                                 min={0}
-                                className="input input-bordered w-full"
+                                className={`input input-bordered w-full ${newMonthlyQuota > 0 && newMonthlyQuota < QUOTA_HOLD_AMOUNT ? 'input-error' : ''}`}
                                 value={newMonthlyQuota}
                                 onChange={e => setNewMonthlyQuota(Math.max(0, parseInt(e.target.value) || 0))}
                                 placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
                             />
-                            <label className="label">
-                                <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
-                            </label>
+                            {newMonthlyQuota > 0 && newMonthlyQuota < QUOTA_HOLD_AMOUNT ? (
+                                <label className="label"><span className="label-text-alt text-red-500">非零额度不能小于 {QUOTA_HOLD_AMOUNT}（或填 0 不限制）</span></label>
+                            ) : (
+                                <label className="label">
+                                    <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
+                                </label>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                                {MONTHLY_QUOTA_PRESETS.map(p => (
+                                    <button key={p.label} type="button" onClick={() => setNewMonthlyQuota(p.value)} className="px-2 py-0.5 text-xs border border-gray-200 dark:border-base-300 rounded-md text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors">{p.label}</button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="modal-action">
-                            <button className="px-4 py-2 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-sm transition-colors" onClick={() => setShowCreateModal(false)}>
+                            <button className="px-4 py-2 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-sm transition-colors" onClick={resetAndCloseCreateModal}>
                                 {t('common.cancel', { defaultValue: 'Cancel' })}
                             </button>
                             <button
@@ -697,6 +834,8 @@ const UserToken: React.FC = () => {
                                 {t('common.create', { defaultValue: 'Create' })}
                             </button>
                         </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}
@@ -785,14 +924,23 @@ const UserToken: React.FC = () => {
                             <input
                                 type="number"
                                 min={0}
-                                className="input input-bordered w-full"
+                                className={`input input-bordered w-full ${editDailyQuota > 0 && editDailyQuota < QUOTA_HOLD_AMOUNT ? 'input-error' : ''}`}
                                 value={editDailyQuota}
                                 onChange={e => setEditDailyQuota(Math.max(0, parseInt(e.target.value) || 0))}
                                 placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
                             />
-                            <label className="label">
-                                <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
-                            </label>
+                            {editDailyQuota > 0 && editDailyQuota < QUOTA_HOLD_AMOUNT ? (
+                                <label className="label"><span className="label-text-alt text-red-500">非零额度不能小于 {QUOTA_HOLD_AMOUNT}（或填 0 不限制）</span></label>
+                            ) : (
+                                <label className="label">
+                                    <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
+                                </label>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                                {DAILY_QUOTA_PRESETS.map(p => (
+                                    <button key={p.label} type="button" onClick={() => setEditDailyQuota(p.value)} className="px-2 py-0.5 text-xs border border-gray-200 dark:border-base-300 rounded-md text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors">{p.label}</button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="form-control w-full mb-3">
@@ -806,14 +954,23 @@ const UserToken: React.FC = () => {
                             <input
                                 type="number"
                                 min={0}
-                                className="input input-bordered w-full"
+                                className={`input input-bordered w-full ${editMonthlyQuota > 0 && editMonthlyQuota < QUOTA_HOLD_AMOUNT ? 'input-error' : ''}`}
                                 value={editMonthlyQuota}
                                 onChange={e => setEditMonthlyQuota(Math.max(0, parseInt(e.target.value) || 0))}
                                 placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
                             />
-                            <label className="label">
-                                <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
-                            </label>
+                            {editMonthlyQuota > 0 && editMonthlyQuota < QUOTA_HOLD_AMOUNT ? (
+                                <label className="label"><span className="label-text-alt text-red-500">非零额度不能小于 {QUOTA_HOLD_AMOUNT}（或填 0 不限制）</span></label>
+                            ) : (
+                                <label className="label">
+                                    <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
+                                </label>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                                {MONTHLY_QUOTA_PRESETS.map(p => (
+                                    <button key={p.label} type="button" onClick={() => setEditMonthlyQuota(p.value)} className="px-2 py-0.5 text-xs border border-gray-200 dark:border-base-300 rounded-md text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors">{p.label}</button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="modal-action">
@@ -827,6 +984,52 @@ const UserToken: React.FC = () => {
                             >
                                 {updating && <RefreshCw size={14} className="animate-spin" />}
                                 {t('common.update', { defaultValue: 'Update' })}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirm Modal */}
+            {deletingToken && (
+                <div className="modal modal-open">
+                    <div className="modal-box max-w-md">
+                        <div className="flex flex-col items-center text-center">
+                            <div className="w-14 h-14 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center mb-3">
+                                <Trash2 className="w-7 h-7 text-red-500" />
+                            </div>
+                            <h3 className="font-bold text-lg mb-1">确认删除该 Token？</h3>
+                            <p className="text-sm text-gray-500 mb-4">删除后无法恢复，使用该 Token 的客户端将立即失效</p>
+                        </div>
+                        <div className="bg-gray-50 dark:bg-base-200 rounded-lg p-3 text-sm space-y-1.5 mb-2">
+                            <div className="flex justify-between items-center">
+                                <span className="text-gray-400">用户名</span>
+                                <span className="font-medium">{deletingToken.username}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span className="text-gray-400">Token</span>
+                                <code className="font-mono text-xs">{deletingToken.token.substring(0, 8)}••••••••</code>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span className="text-gray-400">累计请求</span>
+                                <span className="font-medium">{deletingToken.total_requests} 次</span>
+                            </div>
+                        </div>
+                        <div className="modal-action">
+                            <button
+                                className="px-4 py-2 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-sm transition-colors"
+                                onClick={() => setDeletingToken(null)}
+                                disabled={deleting}
+                            >
+                                {t('common.cancel', { defaultValue: 'Cancel' })}
+                            </button>
+                            <button
+                                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2 disabled:opacity-50"
+                                onClick={confirmDelete}
+                                disabled={deleting}
+                            >
+                                {deleting && <RefreshCw size={14} className="animate-spin" />}
+                                确认删除
                             </button>
                         </div>
                     </div>

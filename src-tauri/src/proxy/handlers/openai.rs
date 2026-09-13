@@ -5937,7 +5937,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                         let error_ev = build_ws_error_event(
                             403,
                             "insufficient_quota",
-                            "Token daily/monthly quota exceeded.".to_string(),
+                            "Token 每日/每月额度已用尽。".to_string(),
                         );
                         let _ = socket.send(Message::Text(error_ev.to_string())).await;
                         continue;

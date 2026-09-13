@@ -1588,4 +1588,40 @@ mod tests {
         // token 不存在：返回 false 而非报错
         assert!(!hold_quota_for_token_with_conn("nonexistent-id", &conn).unwrap());
     }
+
+    #[test]
+    fn test_hold_then_client_abort_rolls_back_fully() {
+        // 回归（WebSocket 预占泄漏）：每轮 hold 之后若客户端在首帧/流中断开（499、实际消耗 0），
+        // 结算必须把本轮 8192 预占全额回滚、精确回到本轮 hold 之前，不能挂账到周期翻转。
+        let conn = setup_test_conn();
+        let token = create_test_token(&conn, 1_000_000, 0);
+
+        // 上一轮：hold 后实际用 3000
+        assert!(hold_quota_for_token_with_conn(&token.id, &conn).unwrap());
+        settle_quota_usage(&token.id, 3000, 200, &conn).unwrap();
+        assert_eq!(get_test_token(&conn, &token.id).daily_used, 3000);
+
+        // 本轮：再次 hold（+8192），随后客户端中断（499、零实际消耗）
+        assert!(hold_quota_for_token_with_conn(&token.id, &conn).unwrap());
+        assert_eq!(
+            get_test_token(&conn, &token.id).daily_used,
+            3000 + QUOTA_HOLD_AMOUNT
+        );
+        settle_quota_usage(&token.id, 0, 499, &conn).unwrap();
+
+        // 必须精确回到本轮 hold 前的 3000，既不能停在 hold 后的 11192，也不能减成负数
+        let after = get_test_token(&conn, &token.id);
+        assert_eq!(
+            after.daily_used, 3000,
+            "aborted turn must fully release its hold"
+        );
+        assert_eq!(
+            after.monthly_used, 3000,
+            "monthly used must roll back in lockstep"
+        );
+        assert!(
+            after.daily_used >= 0,
+            "rollback must never drive used negative"
+        );
+    }
 }

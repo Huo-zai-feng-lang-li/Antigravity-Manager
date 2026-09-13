@@ -5983,7 +5983,30 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let created_ev = build_ws_created_event(&translation_state.response_id);
         let mut outgoing_ws_events = Vec::new();
         if !send_ws_event(&mut socket, &mut outgoing_ws_events, &created_ev).await {
-            // 首帧都发不出去说明客户端已断开，跳过本次请求
+            // 首帧都发不出去说明客户端已断开：本轮尚未请求上游（实际消耗 0），
+            // 必须按 499 结算以全额回滚上方本轮已做的预占，否则该轮 hold 会泄漏到周期翻转。
+            let closed_log = ProxyRequestLog {
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                method: "WS".to_string(),
+                url: "/v1/responses".to_string(),
+                status: 499,
+                duration: request_start.elapsed().as_millis() as u64,
+                model: requested_model.clone(),
+                mapped_model: None,
+                account_email: None,
+                client_ip: client_ip.clone(),
+                error: Some("client closed before first frame".to_string()),
+                request_body: openai_body_str.clone(),
+                response_body: None,
+                input_tokens: None,
+                output_tokens: None,
+                cached_tokens: None,
+                protocol: Some("openai".to_string()),
+                username: user_token_identity.as_ref().map(|i| i.username.clone()),
+            };
+            record_user_token_usage(&turn_identity, &closed_log, user_agent.clone());
+            let _ = state.monitor.log_request(closed_log).await;
             continue;
         }
 
@@ -6120,8 +6143,9 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                             )
                             .await
                             {
-                                // 客户端已断开，跳过本次请求收尾
-                                continue;
+                                // 客户端已断开（translate 返回 false）。此处不能 continue：
+                                // 本轮已预占额度，必须继续走到下方 finalize 与 record_user_token_usage，
+                                // 由 finalized_ok=false 按 499 全额回滚预占，避免 hold 泄漏。
                             }
                         }
                     }

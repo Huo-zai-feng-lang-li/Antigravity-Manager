@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, HelpCircle, CalendarPlus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { request as invoke } from '../utils/request';
 import { showToast } from '../components/common/ToastContainer';
@@ -40,6 +40,15 @@ interface UserTokenStats {
 // 额度预占量：必须与 Rust 后端 user_token_db.rs 的 QUOTA_HOLD_AMOUNT 保持一致。
 // 非零额度若小于该值，单个请求在预占阶段就会被拒（完全不可用），故前端提前阻止提交。
 const QUOTA_HOLD_AMOUNT = 8192;
+
+// 额度填写建议（hover 问号显示）
+const QUOTA_HELP_TEXT = `填多少合适？（经验估算，非精确）
+• 一次普通短对话：几百 ~ 3000 Token
+• 长上下文 / 生成代码：1万 ~ 5万 Token
+• 8192 只够 1 次普通请求，适合测试账号
+• 10万/天 ≈ 几十次普通对话，个人轻度使用
+• 100万/月 ≈ 重度个人或小团队共享
+不确定就先填大一点（如 100万），用几天看进度条再调`;
 
 const UserToken: React.FC = () => {
     const { t } = useTranslation();
@@ -480,7 +489,7 @@ const UserToken: React.FC = () => {
                                             </button>
                                             <div className="dropdown dropdown-end">
                                                 <label tabIndex={0} className="p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-green-500 transition-colors inline-block cursor-pointer">
-                                                    <RefreshCw size={14} />
+                                                    <CalendarPlus size={14} />
                                                 </label>
                                                 <ul tabIndex={0} className="dropdown-content z-[10] menu p-2 shadow-xl bg-white dark:bg-base-100 rounded-xl w-32 border border-gray-100 dark:border-base-200 mt-1">
                                                     <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('user_token.renew')}</div>
@@ -635,7 +644,11 @@ const UserToken: React.FC = () => {
 
                         <div className="form-control w-full mb-3">
                             <label className="label">
-                                <span className="label-text">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}</span>
+                                <span className="label-text flex items-center gap-1">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}
+                                    <div className="tooltip tooltip-right [&::after]:whitespace-pre-wrap [&::after]:max-w-[280px] [&::after]:text-left [&::after]:leading-relaxed [&::after]:text-xs" data-tip={QUOTA_HELP_TEXT}>
+                                        <HelpCircle size={13} className="text-gray-400 hover:text-gray-600 cursor-help" />
+                                    </div>
+                                </span>
                             </label>
                             <input
                                 type="number"
@@ -652,7 +665,11 @@ const UserToken: React.FC = () => {
 
                         <div className="form-control w-full mb-3">
                             <label className="label">
-                                <span className="label-text">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}</span>
+                                <span className="label-text flex items-center gap-1">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}
+                                    <div className="tooltip tooltip-right [&::after]:whitespace-pre-wrap [&::after]:max-w-[280px] [&::after]:text-left [&::after]:leading-relaxed [&::after]:text-xs" data-tip={QUOTA_HELP_TEXT}>
+                                        <HelpCircle size={13} className="text-gray-400 hover:text-gray-600 cursor-help" />
+                                    </div>
+                                </span>
                             </label>
                             <input
                                 type="number"
@@ -759,7 +776,11 @@ const UserToken: React.FC = () => {
 
                         <div className="form-control w-full mb-3">
                             <label className="label">
-                                <span className="label-text">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}</span>
+                                <span className="label-text flex items-center gap-1">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}
+                                    <div className="tooltip tooltip-right [&::after]:whitespace-pre-wrap [&::after]:max-w-[280px] [&::after]:text-left [&::after]:leading-relaxed [&::after]:text-xs" data-tip={QUOTA_HELP_TEXT}>
+                                        <HelpCircle size={13} className="text-gray-400 hover:text-gray-600 cursor-help" />
+                                    </div>
+                                </span>
                             </label>
                             <input
                                 type="number"
@@ -776,7 +797,11 @@ const UserToken: React.FC = () => {
 
                         <div className="form-control w-full mb-3">
                             <label className="label">
-                                <span className="label-text">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}</span>
+                                <span className="label-text flex items-center gap-1">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}
+                                    <div className="tooltip tooltip-right [&::after]:whitespace-pre-wrap [&::after]:max-w-[280px] [&::after]:text-left [&::after]:leading-relaxed [&::after]:text-xs" data-tip={QUOTA_HELP_TEXT}>
+                                        <HelpCircle size={13} className="text-gray-400 hover:text-gray-600 cursor-help" />
+                                    </div>
+                                </span>
                             </label>
                             <input
                                 type="number"

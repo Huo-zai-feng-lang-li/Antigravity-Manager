@@ -17,6 +17,10 @@ interface UserToken {
     max_ips: number;
     curfew_start?: string;
     curfew_end?: string;
+    daily_quota: number;
+    monthly_quota: number;
+    daily_used: number;
+    monthly_used: number;
     created_at: number;
     updated_at: number;
     last_used_at?: number;
@@ -49,6 +53,8 @@ const UserToken: React.FC = () => {
     const [editMaxIps, setEditMaxIps] = useState(0);
     const [editCurfewStart, setEditCurfewStart] = useState('');
     const [editCurfewEnd, setEditCurfewEnd] = useState('');
+    const [editDailyQuota, setEditDailyQuota] = useState(0);
+    const [editMonthlyQuota, setEditMonthlyQuota] = useState(0);
     const [updating, setUpdating] = useState(false);
 
     // Create Form State
@@ -58,6 +64,8 @@ const UserToken: React.FC = () => {
     const [newMaxIps, setNewMaxIps] = useState(0);
     const [newCurfewStart, setNewCurfewStart] = useState('');
     const [newCurfewEnd, setNewCurfewEnd] = useState('');
+    const [newDailyQuota, setNewDailyQuota] = useState(0);
+    const [newMonthlyQuota, setNewMonthlyQuota] = useState(0);
     const [newCustomExpires, setNewCustomExpires] = useState(''); // datetime-local value
 
     const loadData = async () => {
@@ -93,6 +101,16 @@ const UserToken: React.FC = () => {
             return;
         }
 
+        // 验证额度：非零额度必须 >= 8192（预占量），否则 Token 完全不可用
+        if (newDailyQuota > 0 && newDailyQuota < 8192) {
+            showToast('每日额度不能小于 8192（或设为 0 不限制）', 'error');
+            return;
+        }
+        if (newMonthlyQuota > 0 && newMonthlyQuota < 8192) {
+            showToast('每月额度不能小于 8192（或设为 0 不限制）', 'error');
+            return;
+        }
+
         setCreating(true);
         try {
             // 计算自定义过期时间戳
@@ -108,7 +126,9 @@ const UserToken: React.FC = () => {
                     max_ips: newMaxIps,
                     curfew_start: newCurfewStart || null,
                     curfew_end: newCurfewEnd || null,
-                    custom_expires_at: customExpiresAt || null
+                    custom_expires_at: customExpiresAt || null,
+                    daily_quota: newDailyQuota,
+                    monthly_quota: newMonthlyQuota
                 }
             });
             showToast(t('common.create_success') || 'Created successfully', 'success');
@@ -119,6 +139,8 @@ const UserToken: React.FC = () => {
             setNewMaxIps(0);
             setNewCurfewStart('');
             setNewCurfewEnd('');
+            setNewDailyQuota(0);
+            setNewMonthlyQuota(0);
             setNewCustomExpires('');
             loadData();
         } catch (e) {
@@ -146,6 +168,8 @@ const UserToken: React.FC = () => {
         setEditMaxIps(token.max_ips ?? 0);  // 使用 ?? 确保 null/undefined 变为 0
         setEditCurfewStart(token.curfew_start ?? '');
         setEditCurfewEnd(token.curfew_end ?? '');
+        setEditDailyQuota(token.daily_quota ?? 0);
+        setEditMonthlyQuota(token.monthly_quota ?? 0);
         setShowEditModal(true);
     };
 
@@ -153,6 +177,16 @@ const UserToken: React.FC = () => {
         if (!editingToken) return;
         if (!editUsername) {
             showToast(t('user_token.username_required') || 'Username is required', 'error');
+            return;
+        }
+
+        // 验证额度：非零额度必须 >= 8192（预占量），否则 Token 完全不可用
+        if (editDailyQuota > 0 && editDailyQuota < 8192) {
+            showToast('每日额度不能小于 8192（或设为 0 不限制）', 'error');
+            return;
+        }
+        if (editMonthlyQuota > 0 && editMonthlyQuota < 8192) {
+            showToast('每月额度不能小于 8192（或设为 0 不限制）', 'error');
             return;
         }
 
@@ -166,7 +200,9 @@ const UserToken: React.FC = () => {
                     max_ips: editMaxIps,
                     // 使用双层包装: undefined = 不更新, null = 清空, string = 设置值
                     curfew_start: editCurfewStart === '' ? null : editCurfewStart,
-                    curfew_end: editCurfewEnd === '' ? null : editCurfewEnd
+                    curfew_end: editCurfewEnd === '' ? null : editCurfewEnd,
+                    daily_quota: editDailyQuota,
+                    monthly_quota: editMonthlyQuota
                 }
             });
             showToast(t('common.update_success') || 'Updated successfully', 'success');
@@ -397,6 +433,34 @@ const UserToken: React.FC = () => {
                                                 <span>{token.curfew_start} - {token.curfew_end}</span>
                                             </div>
                                         )}
+                                        {(token.daily_quota > 0 || token.monthly_quota > 0) && (
+                                            <div className="mt-1.5 space-y-1">
+                                                {token.daily_quota > 0 && (
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="text-[10px] text-gray-400 w-4">日</span>
+                                                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all ${token.daily_used / token.daily_quota >= 0.9 ? 'bg-red-500' : token.daily_used / token.daily_quota >= 0.7 ? 'bg-orange-500' : 'bg-blue-500'}`}
+                                                                style={{ width: `${Math.min(100, (token.daily_used / token.daily_quota) * 100)}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="text-[10px] text-gray-400 tabular-nums">{(token.daily_used / 1000).toFixed(1)}k/{(token.daily_quota / 1000).toFixed(1)}k</span>
+                                                    </div>
+                                                )}
+                                                {token.monthly_quota > 0 && (
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="text-[10px] text-gray-400 w-4">月</span>
+                                                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all ${token.monthly_used / token.monthly_quota >= 0.9 ? 'bg-red-500' : token.monthly_used / token.monthly_quota >= 0.7 ? 'bg-orange-500' : 'bg-purple-500'}`}
+                                                                style={{ width: `${Math.min(100, (token.monthly_used / token.monthly_quota) * 100)}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="text-[10px] text-gray-400 tabular-nums">{(token.monthly_used / 1000).toFixed(1)}k/{(token.monthly_quota / 1000).toFixed(1)}k</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </td>
                                     <td className="text-[10px] text-gray-400 italic">
                                         {formatTime(token.created_at)}
@@ -565,6 +629,40 @@ const UserToken: React.FC = () => {
                             </label>
                         </div>
 
+                        <div className="form-control w-full mb-3">
+                            <label className="label">
+                                <span className="label-text">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}</span>
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                className="input input-bordered w-full"
+                                value={newDailyQuota}
+                                onChange={e => setNewDailyQuota(Math.max(0, parseInt(e.target.value) || 0))}
+                                placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
+                            />
+                            <label className="label">
+                                <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
+                            </label>
+                        </div>
+
+                        <div className="form-control w-full mb-3">
+                            <label className="label">
+                                <span className="label-text">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}</span>
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                className="input input-bordered w-full"
+                                value={newMonthlyQuota}
+                                onChange={e => setNewMonthlyQuota(Math.max(0, parseInt(e.target.value) || 0))}
+                                placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
+                            />
+                            <label className="label">
+                                <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
+                            </label>
+                        </div>
+
                         <div className="modal-action">
                             <button className="px-4 py-2 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-sm transition-colors" onClick={() => setShowCreateModal(false)}>
                                 {t('common.cancel', { defaultValue: 'Cancel' })}
@@ -652,6 +750,40 @@ const UserToken: React.FC = () => {
                             </div>
                             <label className="label">
                                 <span className="label-text-alt text-gray-500">{t('user_token.hint_curfew', { defaultValue: 'Leave empty to disable. Based on Beijing time (UTC+8).' })}</span>
+                            </label>
+                        </div>
+
+                        <div className="form-control w-full mb-3">
+                            <label className="label">
+                                <span className="label-text">{t('user_token.daily_quota', { defaultValue: 'Daily Token Quota' })}</span>
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                className="input input-bordered w-full"
+                                value={editDailyQuota}
+                                onChange={e => setEditDailyQuota(Math.max(0, parseInt(e.target.value) || 0))}
+                                placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
+                            />
+                            <label className="label">
+                                <span className="label-text-alt text-gray-500">{t('user_token.hint_daily_quota', { defaultValue: 'Max tokens per day (input + output). 0 = unlimited.' })}</span>
+                            </label>
+                        </div>
+
+                        <div className="form-control w-full mb-3">
+                            <label className="label">
+                                <span className="label-text">{t('user_token.monthly_quota', { defaultValue: 'Monthly Token Quota' })}</span>
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                className="input input-bordered w-full"
+                                value={editMonthlyQuota}
+                                onChange={e => setEditMonthlyQuota(Math.max(0, parseInt(e.target.value) || 0))}
+                                placeholder={t('user_token.placeholder_quota', { defaultValue: '0 = Unlimited' })}
+                            />
+                            <label className="label">
+                                <span className="label-text-alt text-gray-500">{t('user_token.hint_monthly_quota', { defaultValue: 'Max tokens per calendar month. 0 = unlimited.' })}</span>
                             </label>
                         </div>
 

@@ -1387,7 +1387,12 @@
     "placeholder_desc": "选填备注",
     "placeholder_max_ips": "0 = 不限制",
     "hint_max_ips": "0 表示不限制",
-    "hint_curfew": "留空则禁用。基于服务器时间。"
+    "hint_curfew": "留空则禁用。基于服务器时间。",
+    "daily_quota": "每日 Token 额度",
+    "monthly_quota": "每月 Token 额度",
+    "placeholder_quota": "0 = 不限制",
+    "hint_daily_quota": "每日最大 Token 用量（输入+输出）。0 表示不限制。",
+    "hint_monthly_quota": "每月自然月最大 Token 用量。0 表示不限制。"
   },
   "apiKeyFun": {
     "title": "APIKEY.FUN 中转站",

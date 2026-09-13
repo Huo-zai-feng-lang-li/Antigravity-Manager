@@ -279,6 +279,18 @@ pub(crate) fn record_user_token_usage(
             log.status as u16,
             user_agent,
         );
+
+        // 额度校正/回滚：成功请求按实际用量多退少补，失败请求全额回滚预占量
+        let actual_used =
+            log.input_tokens.unwrap_or(0) as i64 + log.output_tokens.unwrap_or(0) as i64;
+        if let Ok(conn) = crate::modules::user_token_db::connect_db() {
+            let _ = crate::modules::user_token_db::settle_quota_usage(
+                &identity.token_id,
+                actual_used,
+                log.status as u16,
+                &conn,
+            );
+        }
     }
 }
 

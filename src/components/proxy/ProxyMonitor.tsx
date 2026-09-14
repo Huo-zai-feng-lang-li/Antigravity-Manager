@@ -451,7 +451,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
     return (
         <div className={`flex flex-col bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200 overflow-hidden ${className || 'flex-1'}`}>
-            <div className="p-3 border-b border-gray-100 dark:border-base-200 space-y-3 bg-gray-50/30 dark:bg-base-200/30">
+            <div className="p-3 border-b border-gray-100 dark:border-base-200 space-y-3 bg-gray-50 dark:bg-base-200">
                 <div className="flex items-center gap-4">
                     <button
                         onClick={toggleLogging}

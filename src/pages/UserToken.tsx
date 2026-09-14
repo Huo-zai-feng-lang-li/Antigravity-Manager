@@ -432,7 +432,7 @@ const UserToken: React.FC = () => {
             <div className="flex-1 overflow-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
                 <table className="table table-pin-rows">
                     <thead>
-                        <tr className="bg-gray-50/50 dark:bg-base-200/50">
+                        <tr className="bg-gray-50 dark:bg-base-200">
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.username', { defaultValue: 'Username' })}</th>
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.token', { defaultValue: 'Token' })}</th>
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.expires', { defaultValue: 'Expires' })}</th>
@@ -451,7 +451,7 @@ const UserToken: React.FC = () => {
                                     animate={{ opacity: 1, x: 0 }}
                                     exit={{ opacity: 0, scale: 0.95 }}
                                     transition={{ delay: index * 0.03 }}
-                                    className="hover:bg-gray-50/80 dark:hover:bg-base-200/50 transition-colors group"
+                                    className="hover:bg-gray-100 dark:hover:bg-base-200 transition-colors group"
                                 >
                                     <td className="py-4">
                                         <div className="flex items-center gap-3">

@@ -399,7 +399,7 @@ function Settings() {
         <div className="h-full w-full overflow-y-auto">
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
                 {/* 顶部工具栏：Tab 导航和保存按钮（吸顶固定，不随内容滚动） */}
-                <div className="sticky top-0 z-20 flex justify-between items-center gap-3 -mx-5 px-5 py-2.5 bg-white/95 dark:bg-base-100/95 backdrop-blur-sm border-b border-gray-100 dark:border-base-200">
+                <div className="sticky top-0 z-20 flex justify-between items-center gap-3 -mx-5 px-5 py-2.5 bg-white/95 dark:bg-base-100 backdrop-blur-sm border-b border-gray-100 dark:border-base-200">
                     {/* Tab 导航 - 采用顶部导航栏样式：外层灰色容器 */}
                     <div className="flex items-center gap-1 bg-gray-100 dark:bg-base-200 rounded-full p-1 w-fit overflow-x-auto">
                         <button

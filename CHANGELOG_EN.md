@@ -3,6 +3,12 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.7 (2026-09-14)**:
+        -   **[Dark Mode UI Fix] Three Off-Light Backgrounds Corrected**:
+            -   **Root cause**: When a daisyUI theme color (base-100/200) is combined with a Tailwind opacity modifier (/30 /50 /95), the dark: variant emits no effective rule in the built CSS and silently falls back to the light bg-gray-XX, leaving three surfaces mismatched in dark mode.
+            -   **Monitor toolbar**: Changed from semi-transparent mid-gray to dark base-200, matching the pagination bar below.
+            -   **User Token table header & row hover**: Header from light gray to dark base-200; row hover from near-white to dark base-200, giving clear layering against the card in dark mode.
+            -   **Settings sticky header**: Changed from white semi-transparent to dark base-100; light theme keeps its frosted-glass translucency.
     *   **v4.8.6 (2026-09-14)**:
         -   **[Token Page & Form Control Fixes] Refresh Feedback & Input Padding Restored**:
             -   **Refresh button always gives feedback**: Manually clicking refresh re-fetches the latest list and now shows a "Token list refreshed" toast on completion (so a refresh is perceptible even when data is unchanged); failures still surface an error toast.

@@ -106,12 +106,15 @@ const UserToken: React.FC = () => {
     const loadData = async () => {
         setLoading(true);
         try {
-            const [tokensData, statsData] = await Promise.all([
-                invoke<UserToken[]>('list_user_tokens'),
-                invoke<UserTokenStats>('get_user_token_summary')
-            ]);
+            // 列表与统计独立加载：即使统计接口失败，列表也必须完成刷新，避免“点了刷新没反应”
+            const tokensData = await invoke<UserToken[]>('list_user_tokens');
             setTokens(tokensData);
-            setStats(statsData);
+            try {
+                const statsData = await invoke<UserTokenStats>('get_user_token_summary');
+                setStats(statsData);
+            } catch (e) {
+                console.error('Failed to load user token summary', e);
+            }
         } catch (e) {
             console.error('Failed to load user tokens', e);
             showToast(t('common.load_failed') || 'Failed to load data', 'error');
@@ -435,7 +438,7 @@ const UserToken: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-base-200">
                         <AnimatePresence mode="popLayout">
-                            {!loading && tokens.map((token, index) => (
+                            {tokens.map((token, index) => (
                                 <motion.tr
                                     key={token.id}
                                     initial={{ opacity: 0, x: -10 }}
@@ -548,20 +551,20 @@ const UserToken: React.FC = () => {
                                             </div>
                                         )}
                                     </td>
-                                    <td className="text-xs text-gray-400 italic">
+                                    <td className="text-sm text-gray-500">
                                         {formatTime(token.created_at)}
                                     </td>
                                     <td className="text-right">
                                         <div className="flex justify-end items-center gap-1">
                                             <button
                                                 onClick={() => handleEdit(token)}
-                                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
+                                                className="p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
                                                 title={t('common.edit', { defaultValue: 'Edit' })}
                                             >
                                                 <Settings size={15} />
                                             </button>
                                             <div className="dropdown dropdown-end">
-                                                <label tabIndex={0} className={`p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors inline-block cursor-pointer ${renewingId === token.id ? 'text-green-500' : 'text-gray-500 hover:text-green-500'}`}>
+                                                <label tabIndex={0} className={`p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors cursor-pointer ${renewingId === token.id ? 'text-green-500' : 'text-gray-500 hover:text-green-500'}`}>
                                                     <CalendarPlus size={15} className={renewingId === token.id ? 'animate-spin' : ''} />
                                                 </label>
                                                 <ul tabIndex={0} className="dropdown-content z-[10] menu p-2 shadow-xl bg-white dark:bg-base-100 rounded-xl w-32 border border-gray-100 dark:border-base-200 mt-1">
@@ -573,7 +576,7 @@ const UserToken: React.FC = () => {
                                             </div>
                                             <button
                                                 onClick={() => requestDelete(token)}
-                                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+                                                className="p-1.5 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
                                                 title={t('common.delete', { defaultValue: 'Delete' })}
                                             >
                                                 <Trash2 size={15} />
@@ -583,7 +586,8 @@ const UserToken: React.FC = () => {
                                 </motion.tr>
                             ))}
                         </AnimatePresence>
-                        {loading && Array.from({ length: 4 }).map((_, i) => (
+                        {/* 骨架屏仅首次加载（无数据）时显示；刷新已有数据时行保留原位，内容原地更新 */}
+                        {loading && tokens.length === 0 && Array.from({ length: 4 }).map((_, i) => (
                             <tr key={`skeleton-${i}`} className="animate-pulse">
                                 {Array.from({ length: 7 }).map((__, j) => (
                                     <td key={j} className="py-4">

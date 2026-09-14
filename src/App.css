@@ -157,3 +157,20 @@ a {
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
 }
+
+/* daisyUI 5 已移除 input-bordered / select-bordered，且其默认边框宽度会被 Tailwind preflight
+   的 border-width:0 清零（视觉上完全无边框）。这里用完整 border 简写为全程序输入框/下拉框补边框；
+   排除 ghost（无边框变体）与 error（保留红色错误边框）。 */
+.input:not(.input-ghost):not(.input-error),
+.select:not(.select-ghost):not(.select-error) {
+  border: 1px solid #d1d5db; /* gray-300 */
+}
+.dark .input:not(.input-ghost):not(.input-error),
+.dark .select:not(.select-ghost):not(.select-error) {
+  border: 1px solid #334155; /* slate-700 = base-300 */
+}
+/* error 变体：排除规则不覆盖，这里显式补回红色边框（宽度同样会被 preflight 清零） */
+.input.input-error,
+.select.select-error {
+  border: 1px solid var(--color-error);
+}

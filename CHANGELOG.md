@@ -3,6 +3,12 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.5 (2026-09-14)**:
+        -   **[Token 管理页 UI 修复] 刷新按钮整改与输入框边框补全**:
+            -   **列表刷新真正拉取最新数据**: 点击“创建 Token”旁的刷新按钮，每次重新调用后端 `list_user_tokens`（实时查询 SQLite，无缓存）并原地更新已有行；行渲染不再被骨架屏整体替换，骨架屏仅在首次加载显示；列表与统计接口解耦，统计失败不再阻断列表刷新。
+            -   **创建时间列可读性**: 去除斜体、字号 `text-xs` → `text-sm`、颜色加深（`text-gray-500`）。
+            -   **操作列图标垂直对齐**: 设置/续费/删除三个操作统一 `flex items-center justify-center`，修复续费图标偏高的基线对齐问题。
+            -   **全程序输入框/下拉框补清晰边框**: 修复 daisyUI 5 边框宽度被 Tailwind preflight 清零导致输入框完全无边框的问题；浅色主题 gray-300、深色主题 slate-700，error 变体保留主题红框，ghost 变体不受影响。
     *   **v4.7.6 (2026-09-11)**:
         -   **[反代核心性能重构] 调度热路径消除磁盘 I/O 与深拷贝**:
             -   **Token 调度零拷贝借用**: 将 `TokenManager.tokens` 重构为 `Arc<DashMap<String, Arc<ProxyToken>>>`，在候选 Token 筛选与 P2C 调度遍历中实现全链路引用借用，彻底消除每次请求高频遍历时的 `ProxyToken` 结构体深拷贝开销。

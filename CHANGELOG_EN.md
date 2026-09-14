@@ -3,6 +3,12 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.5 (2026-09-14)**:
+        -   **[Token Management UI Fixes] Refresh Overhaul & Input Border Restoration**:
+            -   **Refresh now fetches the latest data**: Clicking the refresh button next to "Create Token" re-invokes the backend `list_user_tokens` command (a live SQLite query with no cache) and updates existing rows in place; rows are no longer replaced by the skeleton screen, which now only appears on first load; list loading is decoupled from statistics so a stats failure no longer blocks the list refresh.
+            -   **Readable created-at column**: Removed italic styling, bumped font size from `text-xs` to `text-sm`, and deepened the color to `text-gray-500`.
+            -   **Aligned action icons**: Settings / renew / delete actions now share `flex items-center justify-center`, fixing the renew icon sitting higher due to baseline alignment.
+            -   **Visible borders on all inputs/selects**: Fixed daisyUI 5 input borders being zeroed by Tailwind's preflight (inputs appeared fully borderless); light theme uses gray-300, dark theme slate-700, the error variant keeps the theme red border, and ghost variants are unaffected.
     *   **v4.7.6 (2026-09-11)**:
         -   **[Proxy Hot Path Performance] Zero-Copy Token Dispatch & Memory-Mapped State**:
             -   **Zero-Copy Token Scheduling**: Refactored `TokenManager.tokens` to `Arc<DashMap<String, Arc<ProxyToken>>>`, enabling reference-borrowed inspection across candidate filtering and P2C dispatch, eliminating `ProxyToken` clone overhead on every request.

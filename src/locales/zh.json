@@ -1392,7 +1392,8 @@
     "monthly_quota": "每月 Token 额度",
     "placeholder_quota": "0 = 不限制",
     "hint_daily_quota": "每日最大 Token 用量（输入+输出）。0 表示不限制。",
-    "hint_monthly_quota": "每月自然月最大 Token 用量。0 表示不限制。"
+    "hint_monthly_quota": "每月自然月最大 Token 用量。0 表示不限制。",
+    "refresh_success": "Token 列表已刷新"
   },
   "apiKeyFun": {
     "title": "APIKEY.FUN 中转站",

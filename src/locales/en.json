@@ -1422,7 +1422,8 @@
     "placeholder_desc": "Optional notes",
     "placeholder_max_ips": "0 = Unlimited",
     "hint_max_ips": "0 = Unlimited",
-    "hint_curfew": "Leave empty to disable. Based on server time."
+    "hint_curfew": "Leave empty to disable. Based on server time.",
+    "refresh_success": "Token list refreshed"
   },
   "apiKeyFun": {
     "title": "APIKEY.FUN Hub",

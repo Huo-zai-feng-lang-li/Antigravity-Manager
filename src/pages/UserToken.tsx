@@ -123,6 +123,12 @@ const UserToken: React.FC = () => {
         }
     };
 
+    // 手动点击刷新：本地 SQLite 查询毫秒级完成、数据无变化时视觉无感，补一个明确的成功反馈
+    const handleRefresh = async () => {
+        await loadData();
+        showToast(t('user_token.refresh_success') || 'Token list refreshed', 'success');
+    };
+
     useEffect(() => {
         loadData();
     }, []);
@@ -351,7 +357,7 @@ const UserToken: React.FC = () => {
 
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => loadData()}
+                        onClick={() => handleRefresh()}
                         className={`p-2 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors ${loading ? 'text-blue-500' : 'text-gray-500'}`}
                         title={t('common.refresh') || 'Refresh'}
                     >

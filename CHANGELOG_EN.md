@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.6 (2026-09-14)**:
+        -   **[Token Page & Form Control Fixes] Refresh Feedback & Input Padding Restored**:
+            -   **Refresh button always gives feedback**: Manually clicking refresh re-fetches the latest list and now shows a "Token list refreshed" toast on completion (so a refresh is perceptible even when data is unchanged); failures still surface an error toast.
+            -   **Padding restored on all inputs/selects/textareas**: Fixed daisyUI component padding being zeroed by Tailwind's preflight, which made text hug the border; daisyUI defaults are restored (12px horizontal on inputs, 28px right padding on selects to keep room for the dropdown arrow, 8px vertical on textareas), and textarea borders are also restored.
     *   **v4.8.5 (2026-09-14)**:
         -   **[Token Management UI Fixes] Refresh Overhaul & Input Border Restoration**:
             -   **Refresh now fetches the latest data**: Clicking the refresh button next to "Create Token" re-invokes the backend `list_user_tokens` command (a live SQLite query with no cache) and updates existing rows in place; rows are no longer replaced by the skeleton screen, which now only appears on first load; list loading is decoupled from statistics so a stats failure no longer blocks the list refresh.

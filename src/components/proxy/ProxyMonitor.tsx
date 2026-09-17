@@ -117,7 +117,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                 {log.username || '-'}
                             </td>
                             <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="truncate text-[11px] text-green-600 dark:text-green-400" style={{ width: '140px', maxWidth: '140px' }} title={log.session_title || ''}>
+                            <td className="truncate text-[11px] text-blue-600 dark:text-blue-400" style={{ width: '140px', maxWidth: '140px' }} title={log.session_title || ''}>
                                 {log.session_title || ''}
                             </td>
                             <td className="text-right text-[9px]" style={{ width: '90px' }}>
@@ -710,6 +710,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             </div>
 
                             {/* View Content */}
+                            <div className="mt-4">
                             {viewMode === 'conversation' && parsedConversation ? (
                                 <ConversationView
                                     parsed={parsedConversation}
@@ -787,6 +788,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     </div>
                                 </div>
                             )}
+                            </div>
                         </div>
                     </div>
                 </div>

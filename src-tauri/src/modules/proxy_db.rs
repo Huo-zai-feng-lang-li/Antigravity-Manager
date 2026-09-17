@@ -122,11 +122,14 @@ fn safe_suffix(s: &str, max_bytes: usize) -> &str {
 /// 与 Gemini protobuf(`mime_type`) 四种写法；外链图片（http URL）不在此计数，
 /// 由前端解析器直接抢救 URL。
 fn count_inline_images(body: &str) -> usize {
+    // 注意：末尾不匹配斜杠 "/"，因为 JSON 序列化会把 "/" 转义为 "\/"，
+    // 写死 "data:image/" 会漏掉 "data:image\/jpeg" 这种合法转义写法，
+    // 导致后端误判无图报文而走头尾截断，base64 被切断后对话视图无法预览图片。
     let needles = [
-        "data:image/",
-        "\"media_type\":\"image/",
-        "\"mimeType\":\"image/",
-        "\"mime_type\":\"image/",
+        "data:image",
+        "\"media_type\":\"image",
+        "\"mimeType\":\"image",
+        "\"mime_type\":\"image",
     ];
     needles
         .iter()

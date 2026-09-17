@@ -1182,7 +1182,8 @@
       "duration": "Duration",
       "time": "Time",
       "empty": "No requests recorded",
-      "user": "User"
+      "user": "User",
+      "title": "Title"
     },
     "details": {
       "title": "Request Details",

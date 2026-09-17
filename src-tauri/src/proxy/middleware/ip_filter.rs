@@ -140,8 +140,9 @@ async fn deny(
         Json(json!({
             "error": {
                 "message": message,
-                "type": "ip_filter",
-                "code": "ip_forbidden"
+                "type": "invalid_request_error",
+                "code": "ip_forbidden",
+                "param": null
             }
         })),
     )

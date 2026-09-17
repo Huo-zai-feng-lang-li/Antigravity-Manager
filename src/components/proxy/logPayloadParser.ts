@@ -944,3 +944,52 @@ export function parseLogPayload(
         requestTruncated
     };
 }
+
+/**
+ * 从标题生成请求中提取会话标题。
+ *
+ * 标题生成请求的特征：系统提示包含 "generate a short title" 或 "task category"，
+ * 模型响应为 `{"title":"...","category":"..."}` JSON。
+ * 用于流量日志列表加一列展示，让用户一眼区分业务请求和元请求。
+ */
+export function extractSessionTitle(requestBody?: string, responseBody?: string): string | null {
+    if (!requestBody || !responseBody) return null;
+    if (!requestBody.includes('generate a short title') && !requestBody.includes('task category')) return null;
+
+    // 优先从结构化 JSON 提取
+    try {
+        const resp = JSON.parse(responseBody);
+        // OpenAI: choices[0].message.content
+        const content = resp?.choices?.[0]?.message?.content
+            || resp?.choices?.[0]?.text
+            || (typeof resp?.output_text === 'string' ? resp.output_text : null);
+        if (content && typeof content === 'string') {
+            const title = parseTitleFromContent(content);
+            if (title) return title;
+        }
+        // 直接返回 JSON 的情况
+        if (resp?.title && typeof resp.title === 'string') return resp.title;
+    } catch { /* 非 JSON，走正则 */ }
+
+    // 正则兜底：从响应文本里提取 {"title":"..."}
+    const m = responseBody.match(/"title"\s*:\s*"([^"]{1,50})"/);
+    if (m) return m[1];
+    return null;
+}
+
+function parseTitleFromContent(content: string): string | null {
+    const trimmed = content.trim();
+    // 模型可能直接返回 JSON，也可能 JSON 包在文本里
+    const jsonMatch = trimmed.match(/\{[^{}]*"title"[^{}]*\}/);
+    if (jsonMatch) {
+        try {
+            const obj = JSON.parse(jsonMatch[0]);
+            if (obj?.title) return String(obj.title);
+        } catch { /* fallthrough */ }
+    }
+    // 模型可能只返回标题文本（不带 category）
+    if (trimmed.length <= 50 && !trimmed.includes('{') && !trimmed.includes('}')) {
+        return trimmed;
+    }
+    return null;
+}

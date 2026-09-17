@@ -520,8 +520,8 @@ const UserToken: React.FC = () => {
                                                         <div className="flex items-center gap-1.5">
                                                             <span className="text-xs text-gray-400 w-4">日</span>
                                                             <div
-                                                                className="tooltip tooltip-right flex-1"
-                                                                data-tip={`日额度：已用 ${token.daily_used.toLocaleString()} / 总额 ${token.daily_quota.toLocaleString()}，剩余 ${Math.max(0, token.daily_quota - token.daily_used).toLocaleString()}（${pct.toFixed(1)}%）`}
+                                                                className="flex-1"
+                                                                title={`日额度：已用 ${token.daily_used.toLocaleString()} / 总额 ${token.daily_quota.toLocaleString()}，剩余 ${Math.max(0, token.daily_quota - token.daily_used).toLocaleString()}（${pct.toFixed(1)}%）`}
                                                             >
                                                                 <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
                                                                     <div
@@ -540,8 +540,8 @@ const UserToken: React.FC = () => {
                                                         <div className="flex items-center gap-1.5">
                                                             <span className="text-xs text-gray-400 w-4">月</span>
                                                             <div
-                                                                className="tooltip tooltip-right flex-1"
-                                                                data-tip={`月额度：已用 ${token.monthly_used.toLocaleString()} / 总额 ${token.monthly_quota.toLocaleString()}，剩余 ${Math.max(0, token.monthly_quota - token.monthly_used).toLocaleString()}（${pct.toFixed(1)}%）`}
+                                                                className="flex-1"
+                                                                title={`月额度：已用 ${token.monthly_used.toLocaleString()} / 总额 ${token.monthly_quota.toLocaleString()}，剩余 ${Math.max(0, token.monthly_quota - token.monthly_used).toLocaleString()}（${pct.toFixed(1)}%）`}
                                                             >
                                                                 <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
                                                                     <div

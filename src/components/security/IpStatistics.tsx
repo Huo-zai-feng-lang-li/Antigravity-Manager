@@ -32,8 +32,8 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
     /** 每个时间窗周期最多补刷一次归属地，离线/限流时不退化为轮询 */
     const enrichScheduledRef = useRef(false);
 
-    const loadStats = useCallback(async (isEnrichRetry = false) => {
-        setLoading(true);
+    const loadStats = useCallback(async (isEnrichRetry = false, silent = false) => {
+        if (!silent) setLoading(true);
         try {
             const hours = timeRange > 0 ? timeRange : undefined;
             const [statsData, tokenData] = await Promise.all([
@@ -55,7 +55,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
         } catch (e) {
             console.error('Failed to load stats', e);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeRange, refreshKey]);
@@ -63,7 +63,11 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
     useEffect(() => {
         enrichScheduledRef.current = false;
         loadStats();
-        return () => { if (enrichTimer.current) clearTimeout(enrichTimer.current); };
+        const poll = setInterval(() => loadStats(false, true), 5000);
+        return () => {
+            clearInterval(poll);
+            if (enrichTimer.current) clearTimeout(enrichTimer.current);
+        };
     }, [loadStats]);
 
     const addRule = async (ip: string, type: 'blacklist' | 'whitelist') => {

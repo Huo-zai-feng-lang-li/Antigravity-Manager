@@ -3,14 +3,14 @@ import { listen } from '@tauri-apps/api/event';
 import ModalDialog from '../common/ModalDialog';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../../utils/request';
-import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, User, MessageSquare, Code2 } from 'lucide-react';
+import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, MessageSquare, Code2 } from 'lucide-react';
 
 import { AppConfig } from '../../types/config';
 import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
-import { parseLogPayload } from './logPayloadParser';
+import { parseLogPayload, extractSessionTitle } from './logPayloadParser';
 import { ConversationView } from './ConversationView';
 
 
@@ -73,9 +73,10 @@ const LogTable: React.FC<LogTableProps> = ({
                         <th style={{ width: '140px' }}>{t('monitor.table.account')}</th>
                         <th style={{ width: '90px' }}>{t('monitor.table.user')}</th>
                         <th style={{ width: '180px' }}>{t('monitor.table.path')}</th>
+                        <th style={{ width: '140px' }}>{t('monitor.table.title')}</th>
                         <th className="text-right" style={{ width: '90px' }}>{t('monitor.table.usage')}</th>
                         <th className="text-right" style={{ width: '80px' }}>{t('monitor.table.duration')}</th>
-                        <th className="text-right" style={{ width: '80px' }}>{t('monitor.table.time')}</th>
+                        <th className="text-right" style={{ width: '100px' }}>{t('monitor.table.time')}</th>
                     </tr>
                 </thead>
                 <tbody className="font-mono text-gray-700 dark:text-gray-300">
@@ -115,13 +116,16 @@ const LogTable: React.FC<LogTableProps> = ({
                                 {log.username || '-'}
                             </td>
                             <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
+                            <td className="truncate text-[11px] text-purple-600 dark:text-purple-400" style={{ width: '140px', maxWidth: '140px' }} title={extractSessionTitle(log.request_body, log.response_body) || ''}>
+                                {extractSessionTitle(log.request_body, log.response_body) || ''}
+                            </td>
                             <td className="text-right text-[9px]" style={{ width: '90px' }}>
                                 {log.input_tokens != null && <div>{t('monitor.input')}: {formatCompactNumber(log.input_tokens)}</div>}
                                 {log.output_tokens != null && <div>{t('monitor.output')}: {formatCompactNumber(log.output_tokens)}</div>}
                             </td>
                             <td className="text-right" style={{ width: '80px' }}>{log.duration}ms</td>
-                            <td className="text-right text-[10px]" style={{ width: '80px' }}>
-                                {new Date(log.timestamp).toLocaleTimeString()}
+                            <td className="text-right text-[10px] whitespace-nowrap" style={{ width: '100px' }}>
+                                {new Date(log.timestamp).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                             </td>
                         </tr>
                     ))}
@@ -495,9 +499,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                     </div>
 
                     <div className="relative">
-                        <User className="absolute left-2.5 top-2 text-gray-400 z-10" size={14} />
                         <select
-                            className="select select-sm select-bordered pl-8 text-xs min-w-[140px] max-w-[220px]"
+                            className="select select-sm select-bordered text-xs min-w-[140px] max-w-[220px]"
                             value={accountFilter}
                             onChange={(e) => setAccountFilter(e.target.value)}
                             title={t('monitor.filters.by_account')}

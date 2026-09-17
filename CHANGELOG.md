@@ -3,6 +3,11 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.24 (2026-09-17)**:
+        -   **[流量日志轮询极致省电：页面失焦/最小化时自动暂停]**:
+            -   **问题**: v4.8.20 引入的 5 秒轮询此前在组件挂载后无条件运行，即使窗口最小化、用户切到其他应用或浏览器标签页不可见，仍每 5 秒执行 4 次数据库查询（load_config / count / logs / stats），后台空转浪费 CPU 与电量。
+            -   **修复**: 监听 `visibilitychange`（标签页/最小化）与 Tauri `onFocusChanged`（窗口失焦）双信号；任一不满足即 clearInterval 暂停轮询，事件回调也跳过不可见渲染；恢复活跃时立即全量 loadData 一次再恢复 5 秒节奏。
+            -   **附带修复**: 轮询闭包读取旧 `loading` state 导致的并发请求问题，改用 `loadingRef` 同步跟踪。
     *   **v4.8.23 (2026-09-17)**:
         -   **[流量日志多模态图片完整预览修复（后端计数兼容 JSON 转义斜杠）]**:
             -   **根因**: 后端 count_inline_images 按 `data:image/` 字节匹配内联图片，但 JSON 序列化会把 `/` 转义为 `\/`，实际报文中是 `data:image\/jpeg`；导致含图报文被判为"无图"而走普通 24KB 头尾截断，base64 中间被插入 `[truncated]` 标记，前端对话视图只能显示灰色占位条。

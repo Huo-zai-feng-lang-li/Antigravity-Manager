@@ -187,6 +187,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(false);
     const [loadingDetail, setLoadingDetail] = useState(false);
+    // 供 setInterval 闭包读取最新 loading，避免闭包捕获旧 state 导致并发请求
+    const loadingRef = useRef(false);
 
     const uniqueAccounts = useMemo(() => {
         const emailSet = new Set<string>();
@@ -202,7 +204,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     }, [logs, accounts]);
 
     const loadData = async (page = 1, searchFilter = filter, accountEmailFilter = accountFilter) => {
-        if (loading) return;
+        if (loadingRef.current) return;
+        loadingRef.current = true;
         setLoading(true);
 
         try {
@@ -268,6 +271,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 console.error('Loading monitor data timeout, please try again later');
             }
         } finally {
+            loadingRef.current = false;
             setLoading(false);
         }
     };
@@ -310,6 +314,61 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
         let unlistenFn: (() => void) | null = null;
         let updateTimeout: number | null = null;
+        let pollInterval: number | null = null;
+        let unlistenFocus: (() => void) | null = null;
+
+        // 页面活跃状态：webview 可见且 Tauri 窗口聚焦时才轮询，否则暂停省资源
+        let isPageVisible = document.visibilityState === 'visible';
+        let isWindowFocused = true;
+
+        const startPolling = () => {
+            if (pollInterval || !isMountedRef.current) return;
+            pollInterval = window.setInterval(() => {
+                if (isMountedRef.current && !loadingRef.current) {
+                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+                }
+            }, 5000);
+        };
+
+        const stopPolling = () => {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        };
+
+        // 活跃状态变化时统一调度：非活跃→活跃立即补拉一次，活跃→非活跃停轮询
+        const refreshActivity = () => {
+            if (!isMountedRef.current) return;
+            const active = isPageVisible && isWindowFocused;
+            if (active) {
+                if (!loadingRef.current) {
+                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+                }
+                startPolling();
+            } else {
+                stopPolling();
+            }
+        };
+
+        const handleVisibility = () => {
+            isPageVisible = document.visibilityState === 'visible';
+            refreshActivity();
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+
+        // Tauri 窗口聚焦/失焦（用户切到其他应用时暂停轮询）
+        if (isTauri()) {
+            import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+                if (!isMountedRef.current) return;
+                getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+                    isWindowFocused = focused;
+                    refreshActivity();
+                }).then(unlisten => {
+                    unlistenFocus = unlisten;
+                });
+            }).catch(() => { /* web 环境忽略 */ });
+        }
 
         const setupListener = async () => {
             if (!isTauri()) return;
@@ -347,6 +406,10 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 updateTimeout = window.setTimeout(async () => {
                     if (!isMountedRef.current) return;
 
+                    // 页面不可见/窗口失焦时跳过 UI 更新，避免不可见渲染浪费资源；
+                    // 恢复活跃时由 refreshActivity 统一 loadData 全量拉取
+                    if (!isPageVisible || !isWindowFocused) return;
+
                     const currentPending = pendingLogsRef.current;
                     if (currentPending.length > 0) {
                         setLogs(prev => {
@@ -380,22 +443,17 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         };
         setupListener();
 
-        // 所有模式启用定时轮询：异步标题请求通常在对话完成数秒后才落库，
-        // 桌面模式仅凭事件监听可能收不到该次更新，轮询保证列表几秒内自动刷新出标题
-        let pollInterval: number | null = null;
-        pollInterval = window.setInterval(() => {
-            if (isMountedRef.current && !loading) {
-                // [FIX] 使用 ref.current 获取最新的筛选条件
-                loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
-            }
-        }, 5000);
+        // 初始启动轮询（仅在页面活跃时）
+        startPolling();
 
         return () => {
             isMountedRef.current = false;
             listenerSetupRef.current = false;
+            document.removeEventListener('visibilitychange', handleVisibility);
             if (unlistenFn) unlistenFn();
+            if (unlistenFocus) unlistenFocus();
             if (updateTimeout) clearTimeout(updateTimeout);
-            if (pollInterval) clearInterval(pollInterval);
+            stopPolling();
         };
     }, []);
 

@@ -65,6 +65,7 @@ pub fn init_db() -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN protocol TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_ip TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN username TEXT", []);
+    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN session_title TEXT", []);
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_timestamp ON request_logs (timestamp DESC)",
@@ -79,6 +80,9 @@ pub fn init_db() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
+    // 回填历史日志的会话标题（仅处理响应里含 title 标记且尚未提取的行）
+    backfill_session_titles(&conn);
+
     Ok(())
 }
 
@@ -86,6 +90,8 @@ pub fn init_db() -> Result<(), String> {
 const BODY_HEAD_LIMIT: usize = 12 * 1024;
 /// 报文落库时尾部保留的最大字节数（用户最后的提问、多模态图片位于 JSON 尾部）。
 const BODY_TAIL_LIMIT: usize = 12 * 1024;
+/// 含内联图片的报文整体保留上限（base64 图片通常 1~3MB，完整保留才能在对话视图显示缩略图）。
+const IMAGE_BODY_LIMIT: usize = 10 * 1024 * 1024;
 
 /// 在不截断 UTF-8 字符的前提下，取字符串的前 max_bytes 字节。
 fn safe_prefix(s: &str, max_bytes: usize) -> &str {
@@ -136,6 +142,10 @@ fn count_inline_images(body: &str) -> usize {
 /// 还能从尾部抢救出最后一条用户消息和图片标记。标记中附带内联
 /// 图片数量，供前端为物理上不完整的 base64 图片生成占位卡片。
 fn truncate_body(body: &str) -> String {
+    // 含内联图片的报文在 IMAGE_BODY_LIMIT 内完整保留，否则 base64 被切断后对话视图无法显示图片
+    if count_inline_images(body) > 0 && body.len() <= IMAGE_BODY_LIMIT {
+        return body.to_string();
+    }
     if body.len() <= BODY_HEAD_LIMIT + BODY_TAIL_LIMIT {
         return body.to_string();
     }
@@ -153,15 +163,126 @@ fn truncate_body(body: &str) -> String {
     format!("{head}{marker}{tail}")
 }
 
+/// 判断请求是否为客户端自动生成会话标题的元请求。
+fn looks_like_title_request(request_body: &str) -> bool {
+    let r = request_body.to_lowercase();
+    const KEYWORDS: &[&str] = &[
+        "generate a short title", "task category",
+        "write a 5-10 word title", "respond with the title",
+        "generate a title for", "create a brief title",
+        "title for the conversation", "conversation title",
+        "generate the title", "containing a title",
+        "生成标题", "为对话起个标题",
+    ];
+    KEYWORDS.iter().any(|k| r.contains(k))
+}
+
+/// 从混合文本中提取 "title":"..." 的值（处理转义，限长 100）。
+fn find_title_in_text(text: &str) -> Option<String> {
+    let key = "\"title\"";
+    let pos = text.find(key)?;
+    let rest = text[pos + key.len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in rest.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => break,
+            _ => out.push(ch),
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() || out.len() > 100 { None } else { Some(out) }
+}
+
+/// 从标题生成请求的响应里提取会话标题。
+/// 顶层 {title,category} 直接采信；content/output_text 内嵌 JSON 仅在请求像标题生成时采信。
+fn extract_session_title(request_body: &str, response_body: &str) -> Option<String> {
+    if request_body.is_empty() || response_body.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = match serde_json::from_str(response_body) {
+        Ok(v) => v,
+        Err(_) => {
+            return if looks_like_title_request(request_body) {
+                find_title_in_text(response_body)
+            } else {
+                None
+            };
+        }
+    };
+
+    // 响应本身就是 {"title":...,"category":...}
+    if let Some(t) = v.get("title").and_then(|x| x.as_str()) {
+        let t = t.trim();
+        if !t.is_empty() && t.len() <= 100 {
+            return Some(t.to_string());
+        }
+    }
+
+    if !looks_like_title_request(request_body) {
+        return None;
+    }
+    let content = v
+        .pointer("/choices/0/message/content")
+        .or_else(|| v.pointer("/choices/0/text"))
+        .or_else(|| v.get("output_text"))
+        .or_else(|| v.get("content"))
+        .and_then(|x| x.as_str());
+    content.and_then(find_title_in_text)
+}
+
+/// 回填历史日志的会话标题。
+fn backfill_session_titles(conn: &rusqlite::Connection) {
+    let rows: Vec<(String, Option<String>, Option<String>)> = {
+        let mut stmt = match conn.prepare(
+            "SELECT id, request_body, response_body FROM request_logs 
+             WHERE session_title IS NULL AND response_body LIKE '%\"title\"%' LIMIT 1000",
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        // 先取候选行（session_title 为空的），再在 Rust 侧按关键词/JSON 精确判断
+        let iter = match stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
+        }) {
+            Ok(it) => it,
+            Err(_) => return,
+        };
+        iter.filter_map(|r| r.ok()).collect()
+    };
+    for (id, req, resp) in rows {
+        if let (Some(req), Some(resp)) = (req.as_deref(), resp.as_deref()) {
+            if let Some(title) = extract_session_title(req, resp) {
+                let _ = conn.execute(
+                    "UPDATE request_logs SET session_title = ?1 WHERE id = ?2 AND session_title IS NULL",
+                    rusqlite::params![title, id],
+                );
+            }
+        }
+    }
+}
+
 pub fn save_log(log: &ProxyRequestLog) -> Result<(), String> {
     let conn = connect_db()?;
 
     let request_body = log.request_body.as_deref().map(truncate_body);
     let response_body = log.response_body.as_deref().map(truncate_body);
+    let session_title = match (log.request_body.as_deref(), log.response_body.as_deref()) {
+        (Some(req), Some(resp)) => extract_session_title(req, resp),
+        _ => None,
+    };
 
     conn.execute(
-        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username, session_title)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             log.id,
             log.timestamp,
@@ -181,6 +302,7 @@ pub fn save_log(log: &ProxyRequestLog) -> Result<(), String> {
             log.protocol,
             log.client_ip,
             log.username,
+            session_title,
         ],
     ).map_err(|e| e.to_string())?;
 
@@ -196,11 +318,7 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 NULL as request_body, NULL as response_body,
                 input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                COALESCE(
-                    json_extract(request_logs.response_body, '$.title'),
-                    json_extract(json_extract(request_logs.response_body, '$.content'), '$.title'),
-                    json_extract(json_extract(request_logs.response_body, '$.choices[0].message.content'), '$.title')
-                ) as session_title
+                session_title
          FROM request_logs
          ORDER BY timestamp DESC
          LIMIT ?1 OFFSET ?2",
@@ -278,7 +396,8 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 request_body, response_body, input_tokens, output_tokens,
-                cached_tokens, account_email, mapped_model, protocol, client_ip, username
+                cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                session_title
          FROM request_logs
          WHERE id = ?1",
         )
@@ -305,7 +424,7 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
             client_ip: row.get(16).unwrap_or(None),
             username: row.get(17).unwrap_or(None),
             user_agent: None,
-            session_title: None,
+            session_title: row.get(18).unwrap_or(None),
         })
     })
     .map_err(|e| e.to_string())
@@ -422,7 +541,8 @@ pub fn get_logs_filtered(
     let sql = if errors_only {
         "SELECT id, timestamp, method, url, status, duration, model, error,
                 NULL as request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username
+                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                session_title
          FROM request_logs
          WHERE (status < 200 OR status >= 400)
          ORDER BY timestamp DESC
@@ -430,14 +550,16 @@ pub fn get_logs_filtered(
     } else if filter.is_empty() {
         "SELECT id, timestamp, method, url, status, duration, model, error,
                 NULL as request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username
+                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                session_title
          FROM request_logs
          ORDER BY timestamp DESC
          LIMIT ?1 OFFSET ?2"
     } else {
         "SELECT id, timestamp, method, url, status, duration, model, error,
                 NULL as request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username
+                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                session_title
          FROM request_logs
          WHERE (url LIKE ?3 OR method LIKE ?3 OR model LIKE ?3 OR CAST(status AS TEXT) LIKE ?3 OR account_email LIKE ?3 OR client_ip LIKE ?3)
          ORDER BY timestamp DESC
@@ -468,7 +590,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
-                    session_title: None,
+                    session_title: row.get(18).unwrap_or(None),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -497,7 +619,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
-                    session_title: None,
+                    session_title: row.get(18).unwrap_or(None),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -526,7 +648,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
-                    session_title: None,
+                    session_title: row.get(18).unwrap_or(None),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -544,7 +666,8 @@ pub fn get_all_logs_for_export() -> Result<Vec<ProxyRequestLog>, String> {
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 request_body, response_body, input_tokens, output_tokens,
-                cached_tokens, account_email, mapped_model, protocol, client_ip, username
+                cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                session_title
          FROM request_logs
          ORDER BY timestamp DESC",
         )
@@ -572,7 +695,7 @@ pub fn get_all_logs_for_export() -> Result<Vec<ProxyRequestLog>, String> {
                 client_ip: row.get(16).unwrap_or(None),
                 username: row.get(17).unwrap_or(None),
                 user_agent: None,
-                session_title: None,
+                session_title: row.get(18).unwrap_or(None),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -691,13 +814,48 @@ mod tests {
 
     #[test]
     fn test_truncate_body_reports_inline_image_count() {
-        let mut long = "x".repeat(25 * 1024);
+        // 超过 IMAGE_BODY_LIMIT 的含图报文仍会截断，marker 必须携带图片数量
+        let mut long = "x".repeat(IMAGE_BODY_LIMIT + 25 * 1024);
         long.push_str(r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"#);
         let out = truncate_body(&long);
+        assert!(out.contains("[truncated"), "oversized image body should be truncated");
         assert!(
             out.contains("images=1"),
             "marker should carry image count: {out}"
         );
+    }
+
+    #[test]
+    fn test_extract_title_from_aggregated_content() {
+        // 代理聚合后落库格式：{content: "<自然语言>\n{\"title\":...}", usage:{}}
+        let req = "Based on the conversation, generate a short title (max 6 words). Conversation: User: 你好";
+        let resp = r#"{"content":"Analyzing the input.\n{\"title\":\"日常问候\",\"category\":\"chat\"}","usage":{}}"#;
+        assert_eq!(extract_session_title(req, resp), Some("日常问候".to_string()));
+    }
+
+    #[test]
+    fn test_extract_title_top_level() {
+        let req = "generate a short title please";
+        let resp = r#"{"title":"Debug Login Issue","category":"code"}"#;
+        assert_eq!(extract_session_title(req, resp), Some("Debug Login Issue".to_string()));
+    }
+
+    #[test]
+    fn test_extract_title_not_false_positive_on_normal_chat() {
+        let req = "帮我写个排序算法";
+        let resp = r#"{"choices":[{"message":{"content":"好的，这是快速排序..."}}]}"#;
+        assert_eq!(extract_session_title(req, resp), None);
+    }
+
+    #[test]
+    fn test_truncate_body_keeps_inline_image_intact() {
+        // 含内联图片且小于 IMAGE_BODY_LIMIT 的报文必须完整保留，否则对话视图无法显示图片
+        let mut body = "prefix".to_string();
+        body.push_str(&"A".repeat(100 * 1024));
+        body.push_str(r#"{"type":"input_image","image_url":"data:image/jpeg;base64,/9j/AAA"}"#);
+        let out = truncate_body(&body);
+        assert_eq!(out, body, "image body under limit must not be truncated");
+        assert!(out.contains("data:image/jpeg;base64,/9j/AAA"));
     }
 
     #[test]

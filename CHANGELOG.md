@@ -3,6 +3,13 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.19 (2026-09-17)**:
+        -   **[流量日志会话标题 + 对话图片彻底修复（后端落库，附单元测试）]**:
+            -   **会话标题根因**: 列表/详情接口的 SQL 出于性能只返回 `NULL as request_body/response_body`，前端拿不到正文永远提取不到标题；v4.8.17 改用 SQL `json_extract` 又对代理聚合后的混合文本 content（自然语言分析 + 末尾内嵌 JSON）无效。
+            -   **标题修法**: 落库时由 Rust 从未截断的原始报文提取标题，写入新增的 `session_title` 列；启动时 `ALTER TABLE ADD COLUMN` 并自动回填历史日志；列表/详情/筛选/导出全部返回该列，前端直接渲染 `log.session_title`。
+            -   **图片不显示根因**: 多模态图片 base64（约 1.5MB）被 24KB 头尾截断拦腰切断，前端只剩灰色占位条。
+            -   **图片修法**: 含内联图片且报文 ≤10MB 时整体原样保留不截断，对话视图可显示完整缩略图；超过 10MB 仍按头尾截断并在标记里注明图片数量。普通文本截断策略不变。
+            -   **质量**: 新增 8 个后端单元测试覆盖标题提取（聚合 content / 顶层 title / 普通对话不误伤）与图片截断边界，`cargo test` 全绿；修复 v4.8.17/v4.8.18 的 CI 编译失败（结构体漏字段、误加字段）。
     *   **v4.8.18 (2026-09-17)**:
         -   **[用户Token横向滚动条最终消除]**:
             -   表格容器 overflow-auto 改 overflow-x-hidden overflow-y-auto，table-fixed 下不再出虚假横向滚动条。

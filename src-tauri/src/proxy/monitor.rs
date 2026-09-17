@@ -256,6 +256,7 @@ impl ProxyMonitor {
                 protocol: log.protocol.clone(),
                 username: log.username.clone(),
                 user_agent: log.user_agent.clone(),
+                session_title: log.session_title.clone(),
             };
             let _ = app.emit("proxy://request", &log_summary);
         }

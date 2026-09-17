@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.19 (2026-09-17)**:
+        -   **[Session title & inline images fixed at storage layer, with unit tests]**:
+            -   **Title root cause**: The list/detail SQL returned `NULL as request_body/response_body` for performance, so the frontend could never extract a title; v4.8.17's SQL `json_extract` also failed on the proxy's aggregated content (natural-language analysis followed by an embedded JSON).
+            -   **Title fix**: Rust now extracts the title from the full untruncated payload at write time into a new `session_title` column; startup runs `ALTER TABLE ADD COLUMN` and backfills history; list/detail/filter/export all return the column and the UI renders `log.session_title` directly.
+            -   **Image root cause**: Multimodal base64 images (~1.5MB) were cut by the 24KB head/tail truncation, leaving only a gray placeholder.
+            -   **Image fix**: Bodies containing inline images and sized up to 10MB are now stored verbatim so the conversation view shows the full thumbnail; bodies over 10MB are still head/tail-truncated with an image count marker. Plain-text truncation is unchanged.
+            -   **Quality**: Added 8 backend unit tests covering title extraction (aggregated content / top-level title / no false positives) and image truncation boundaries; `cargo test` is green. Fixed the v4.8.17/v4.8.18 CI build failures (missing and misplaced struct fields).
     *   **v4.8.15 (2026-09-17)**:
         -   **[Truncated Image Placeholder]**:
             -   **Truncated images now show a gray pill**: Multimodal images truncated by the log size limit (base64 middle cut, unrecoverable) no longer vanish; they show a small gray pill with the mime type. Complete images (base64/url) still render thumbnails with click-to-zoom.

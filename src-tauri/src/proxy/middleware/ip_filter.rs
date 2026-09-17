@@ -113,7 +113,6 @@ async fn deny(
         method: Some(method.to_string()),
         path: Some(uri.path().to_string()),
         user_agent: None,
-        session_title: None,
         status: Some(403),
         duration: None,
         api_key_hash: None,

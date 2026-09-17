@@ -538,6 +538,7 @@ pub async fn monitor_middleware(
         protocol,
         username,
         user_agent: user_agent.clone(),
+        session_title: None,
     };
 
     if content_type.contains("text/event-stream") {

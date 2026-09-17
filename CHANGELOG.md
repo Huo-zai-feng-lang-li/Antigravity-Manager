@@ -3,6 +3,9 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.18 (2026-09-17)**:
+        -   **[用户Token横向滚动条最终消除]**:
+            -   表格容器 overflow-auto 改 overflow-x-hidden overflow-y-auto，table-fixed 下不再出虚假横向滚动条。
     *   **v4.8.17 (2026-09-17)**:
         -   **[流量日志会话标题列真正修复]**:
             -   **根因**: 列表 API SQL 故意 `NULL as request_body/response_body`（性能），前端 extractSessionTitle 拿到空 body 永远提取不出标题。

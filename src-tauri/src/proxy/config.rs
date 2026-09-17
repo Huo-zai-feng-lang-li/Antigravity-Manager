@@ -602,6 +602,19 @@ impl Default for SecurityMonitorConfig {
     }
 }
 
+impl SecurityMonitorConfig {
+    /// 确保黑名单总开关开启（用户语义：加入黑名单 = 立即生效）。
+    /// 返回 true 表示原本关闭、本次被打开，调用方需要持久化配置并热刷新运行态。
+    /// 白名单不能照此处理：白名单是"只允许名单内访问"的强模式，误开启有自锁风险。
+    pub fn ensure_blacklist_enabled(&mut self) -> bool {
+        if self.blacklist.enabled {
+            return false;
+        }
+        self.blacklist.enabled = true;
+        true
+    }
+}
+
 /// 图片任务调度配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSchedulerConfig {
@@ -915,5 +928,21 @@ mod tests {
         // 测试边缘情况
         assert_eq!(normalize_proxy_url(""), "");
         assert_eq!(normalize_proxy_url("   "), "");
+    }
+
+    #[test]
+    fn test_ensure_blacklist_enabled() {
+        // 默认关闭：首次调用应打开并返回"发生了变更"
+        let mut cfg = SecurityMonitorConfig::default();
+        assert!(!cfg.blacklist.enabled);
+        assert!(cfg.ensure_blacklist_enabled());
+        assert!(cfg.blacklist.enabled);
+
+        // 已开启：幂等，不再报告变更
+        assert!(!cfg.ensure_blacklist_enabled());
+        assert!(cfg.blacklist.enabled);
+
+        // 只联动黑名单，白名单保持原状（防自锁）
+        assert!(!cfg.whitelist.enabled);
     }
 }

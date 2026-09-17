@@ -983,7 +983,8 @@
       "usage": "توكنز",
       "duration": "المدة",
       "time": "الوقت",
-      "empty": "لم يتم تسجيل أي طلبات"
+      "empty": "لم يتم تسجيل أي طلبات",
+      "user": "المستخدم"
     },
     "details": {
       "title": "تفاصيل الطلب",
@@ -1238,7 +1239,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "مفتاح القائمة السوداء متوقف — القواعد الحالية لن تمنع أي طلب.",
+      "whitelist_disabled_hint": "وضع القائمة البيضاء متوقف — القواعد الحالية غير مفعّلة. عند التفعيل لا يمكن الوصول إلا لعناوين IP المدرجة.",
+      "enable_now": "تفعيل الآن",
+      "error_switch": "فشل تبديل المفتاح",
+      "blacklist_auto_enabled": "تمت الإضافة إلى القائمة السوداء وتم تفعيل الحظر تلقائيًا"
     }
   },
   "user_token": {

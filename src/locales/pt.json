@@ -1240,7 +1240,8 @@
       "usage": "Tokens",
       "duration": "Duração",
       "time": "Tempo",
-      "empty": "Nenhuma solicitação registrada"
+      "empty": "Nenhuma solicitação registrada",
+      "user": "Usuário"
     },
     "details": {
       "title": "Detalhes da Solicitação",
@@ -1529,7 +1530,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "A lista negra está desativada; as regras não bloquearão nenhuma solicitação.",
+      "whitelist_disabled_hint": "O modo de lista branca está desativado; as regras estão inativas. Quando ativado, apenas IPs da lista podem acessar.",
+      "enable_now": "Ativar agora",
+      "error_switch": "Falha ao alternar",
+      "blacklist_auto_enabled": "Adicionado à lista negra; bloqueio ativado automaticamente"
     }
   },
   "user_token": {

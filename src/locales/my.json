@@ -979,7 +979,8 @@
       "usage": "Token",
       "duration": "Tempoh",
       "time": "Masa",
-      "empty": "Tiada permintaan direkod"
+      "empty": "Tiada permintaan direkod",
+      "user": "User"
     },
     "details": {
       "title": "Butiran Permintaan",
@@ -1182,7 +1183,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "Blacklist switch is OFF — current rules will not block any request.",
+      "whitelist_disabled_hint": "Whitelist mode is OFF — current rules are inactive.",
+      "enable_now": "Enable now",
+      "error_switch": "Failed to toggle the switch",
+      "blacklist_auto_enabled": "Added to blacklist; blocking enabled automatically"
     },
     "logs": {
       "clear": "Clear Logs",

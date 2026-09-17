@@ -1,17 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Search, Trash2, ShieldOff, ShieldCheck, AlertTriangle, X } from 'lucide-react';
+import { Plus, Search, Trash2, ShieldOff, ShieldCheck, AlertTriangle, X, Power } from 'lucide-react';
 import ModalDialog from '../common/ModalDialog';
 import { showToast } from '../common/ToastContainer';
+import { request as invoke } from '../../utils/request';
 import { useIpRuleList } from './useIpRuleList';
 import { isValidIpPattern, remainingTime } from '../../utils/ipFormat';
-import { EXPIRY_PRESETS, type IpBlacklistEntry, type RuleListType, type IpWhitelistEntry } from '../../types/security';
+import { EXPIRY_PRESETS, type IpBlacklistEntry, type RuleListType, type IpWhitelistEntry, type SecurityMonitorConfig } from '../../types/security';
 
 interface Props {
     type: RuleListType;
     refreshKey?: number;
-    /** 白名单模式是否已开启（用于空名单红色警告） */
-    whitelistEnabled?: boolean;
 }
 
 /** 过期选择：预设值或 'custom' */
@@ -139,7 +138,7 @@ const AddRuleModal: React.FC<{
     );
 };
 
-export const IpRuleManager: React.FC<Props> = ({ type, refreshKey, whitelistEnabled }) => {
+export const IpRuleManager: React.FC<Props> = ({ type, refreshKey }) => {
     const { t } = useTranslation();
     const isBlack = type === 'blacklist';
     const { filtered, loading, busy, search, setSearch, addRule, removeRule, clearAll } =
@@ -148,6 +147,43 @@ export const IpRuleManager: React.FC<Props> = ({ type, refreshKey, whitelistEnab
     const [addOpen, setAddOpen] = useState(false);
     const [pendingDelete, setPendingDelete] = useState<string | null>(null);
     const [confirmClear, setConfirmClear] = useState(false);
+    const [securityConfig, setSecurityConfig] = useState<SecurityMonitorConfig | null>(null);
+    const [switching, setSwitching] = useState(false);
+
+    const loadSecurityConfig = async () => {
+        try {
+            const data = await invoke<SecurityMonitorConfig>('get_security_config');
+            setSecurityConfig(data);
+        } catch (e) {
+            console.error('Failed to load security config', e);
+        }
+    };
+
+    useEffect(() => {
+        loadSecurityConfig();
+    }, [refreshKey]);
+
+    const switchEnabled = async (enabled: boolean) => {
+        if (!securityConfig) return;
+        setSwitching(true);
+        try {
+            const next: SecurityMonitorConfig = {
+                ...securityConfig,
+                blacklist: { ...securityConfig.blacklist, enabled: isBlack ? enabled : securityConfig.blacklist.enabled },
+                whitelist: { ...securityConfig.whitelist, enabled: !isBlack ? enabled : securityConfig.whitelist.enabled },
+            };
+            await invoke('update_security_config', { config: next });
+            setSecurityConfig(next);
+            showToast(t('security.config.save_success'), 'success');
+        } catch (e) {
+            console.error('Failed to toggle switch', e);
+            showToast(t('security.rules.error_switch'), 'error');
+        } finally {
+            setSwitching(false);
+        }
+    };
+
+    const switchOn = isBlack ? securityConfig?.blacklist.enabled : securityConfig?.whitelist.enabled;
 
     const accent = isBlack
         ? { border: 'border-red-100 dark:border-red-900/30', icon: <ShieldOff size={20} className="text-red-500" />, ip: 'text-red-700 dark:text-red-400' }
@@ -162,7 +198,26 @@ export const IpRuleManager: React.FC<Props> = ({ type, refreshKey, whitelistEnab
 
     return (
         <div className="flex flex-col h-full bg-white dark:bg-base-100 rounded-xl">
-            {!isBlack && whitelistEnabled && filtered.length === 0 && !loading && (
+            {securityConfig && !switchOn && (
+                <div className={`m-4 mb-0 border text-sm rounded-lg p-3 flex items-start gap-2 ${
+                    isBlack
+                        ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                        : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+                }`}>
+                    <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                        {isBlack ? t('security.rules.blacklist_disabled_warning') : t('security.rules.whitelist_disabled_hint')}
+                    </div>
+                    <button
+                        className="btn btn-sm btn-primary gap-1 shrink-0"
+                        disabled={switching}
+                        onClick={() => switchEnabled(true)}
+                    >
+                        <Power size={13} /> {t('security.rules.enable_now')}
+                    </button>
+                </div>
+            )}
+            {!isBlack && switchOn && filtered.length === 0 && !loading && (
                 <div className="m-4 mb-0 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm rounded-lg p-3 flex items-start gap-2">
                     <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                     {t('security.rules.whitelist_empty_warning')}
@@ -262,9 +317,12 @@ export const IpRuleManager: React.FC<Props> = ({ type, refreshKey, whitelistEnab
                     busy={busy}
                     onClose={() => setAddOpen(false)}
                     onSubmit={async ({ ipPattern, note, expiresAt }) => {
-                        return isBlack
-                            ? addRule({ ipPattern, reason: note, expiresAt })
-                            : addRule({ ipPattern, description: note });
+                        const ok = isBlack
+                            ? await addRule({ ipPattern, reason: note, expiresAt })
+                            : await addRule({ ipPattern, description: note });
+                        // 后端在新增黑名单时会自动开启总开关，刷新本地配置让警告条消失
+                        if (ok) await loadSecurityConfig();
+                        return ok;
                     }}
                 />
             )}

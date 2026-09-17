@@ -3751,6 +3751,26 @@ async fn admin_add_ip_to_blacklist(
             Json(ErrorResponse { error: e }),
         )
     })?;
+
+    // 加入黑名单即应立即生效：总开关关闭时自动打开、持久化并热刷新运行态。
+    let mut app_config = crate::modules::config::load_app_config().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
+    if app_config.proxy.security_monitor.ensure_blacklist_enabled() {
+        crate::modules::config::save_app_config(&app_config).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
+        let mut security = state.security.write().await;
+        security.rebuild_preserving_tunnel(&app_config.proxy);
+        tracing::info!("[Security] 黑名单总开关已随新增规则自动启用 (Web API)");
+    }
+
     reload_ip_rules_http(&state)?;
 
     Ok(StatusCode::CREATED)

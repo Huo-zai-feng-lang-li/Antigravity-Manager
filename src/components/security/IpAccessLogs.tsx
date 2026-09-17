@@ -5,7 +5,7 @@ import { request as invoke } from '../../utils/request';
 import Pagination from '../common/Pagination';
 import ModalDialog from '../common/ModalDialog';
 import { showToast } from '../common/ToastContainer';
-import { describeIp, classifyIp } from '../../utils/ipFormat';
+import { describeIp, classifyIp, compactIp } from '../../utils/ipFormat';
 import type { IpAccessLog, IpAccessLogResponse } from '../../types/security';
 
 interface Props {
@@ -194,7 +194,7 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
                         <tr>
                             <th className="w-10" />
                             <th className="w-20">{t('security.logs.status')}</th>
-                            <th className="w-52">{t('security.logs.ip_address')}</th>
+                            <th className="w-64">{t('security.logs.ip_address')}</th>
                             <th className="w-24">{t('security.logs.username')}</th>
                             <th className="w-20">{t('security.logs.method')}</th>
                             <th>{t('security.logs.path')}</th>
@@ -227,8 +227,8 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
                                             )}
                                         </td>
                                         <td>
-                                            <div className="font-mono font-medium leading-tight">{desc.ip}{desc.isIpv6 && <span className="ml-1 text-[10px] text-gray-400">v6</span>}</div>
-                                            {desc.detail && <div className="text-[11px] text-gray-400 truncate max-w-[180px]" title={desc.detail}>{desc.detail}</div>}
+                                            <div className="font-mono font-medium leading-tight" title={desc.ip}>{compactIp(desc.ip)}{desc.isIpv6 && <span className="ml-1 text-[10px] text-gray-400">v6</span>}</div>
+                                            {desc.detail && <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[220px]" title={desc.detail}>{desc.detail}</div>}
                                         </td>
                                         <td className="font-medium text-blue-600 dark:text-blue-400">{log.username || '-'}</td>
                                         <td className="font-bold text-xs">{log.method || '-'}</td>

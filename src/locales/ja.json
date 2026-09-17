@@ -1178,7 +1178,8 @@
       "usage": "トークン",
       "duration": "所要時間",
       "time": "時間",
-      "empty": "記録されたリクエストはありません"
+      "empty": "記録されたリクエストはありません",
+      "user": "ユーザー"
     },
     "details": {
       "title": "リクエスト詳細",
@@ -1464,7 +1465,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "ブラックリストのスイッチがオフです。ルールはリクエストをブロックしません。",
+      "whitelist_disabled_hint": "ホワイトリストモードがオフです。ルールは無効です。オンにするとリスト内の IP のみアクセスできます。",
+      "enable_now": "今すぐ有効化",
+      "error_switch": "切り替えに失敗しました",
+      "blacklist_auto_enabled": "ブラックリストに追加し、ブロックを自動で有効化しました"
     }
   },
   "user_token": {

@@ -56,6 +56,31 @@ async fn reload_rules(app_state: &State<'_, ProxyServiceState>) {
     }
 }
 
+/// 加黑规则后确保黑名单总开关开启并持久化（用户语义：加入黑名单 = 立即生效）。
+/// 任何失败只记录日志、不阻断规则写入，避免用户看到"添加成功"却没有规则。
+async fn ensure_blacklist_enabled_persisted(app_state: &State<'_, ProxyServiceState>) {
+    let mut app_config = match crate::modules::config::load_app_config() {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!("加载配置失败，无法自动启用黑名单开关: {error}");
+            return;
+        }
+    };
+    if !app_config.proxy.security_monitor.ensure_blacklist_enabled() {
+        return;
+    }
+    if let Err(error) = crate::modules::config::save_app_config(&app_config) {
+        tracing::error!("持久化黑名单开关失败: {error}");
+        return;
+    }
+    let mut instance_lock = app_state.instance.write().await;
+    if let Some(instance) = instance_lock.as_mut() {
+        instance.config.security_monitor = app_config.proxy.security_monitor.clone();
+        instance.axum_server.update_security(&instance.config).await;
+    }
+    tracing::info!("[Security] 黑名单总开关已随新增规则自动启用");
+}
+
 /// 读取 GeoIP 开关（运行实例优先，其次磁盘配置）。
 async fn geoip_enabled(app_state: &State<'_, ProxyServiceState>) -> bool {
     if let Some(instance) = app_state.instance.read().await.as_ref() {
@@ -194,6 +219,7 @@ pub async fn add_ip_to_blacklist(
         request.expires_at,
         "manual",
     )?;
+    ensure_blacklist_enabled_persisted(&app_state).await;
     reload_rules(&app_state).await;
     Ok(())
 }

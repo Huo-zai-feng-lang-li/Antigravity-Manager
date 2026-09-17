@@ -102,7 +102,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             )}
 
             {/* 2. 用户提问卡片（含多模态图片高性能预览） */}
-            {(parsed.userPrompt || parsed.images.length > 0) && (
+            {(parsed.userPrompt || parsed.images.length > 0 || parsed.requestTruncated) && (
                 <div className="bg-blue-50/50 dark:bg-blue-950/20 rounded-xl border border-blue-200/70 dark:border-blue-900/50 overflow-hidden shadow-xs">
                     <div className="flex items-center justify-between px-4 py-2.5 bg-blue-100/50 dark:bg-blue-900/30 border-b border-blue-200/50 dark:border-blue-900/40">
                         <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300 font-bold text-xs">
@@ -151,6 +151,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             <div className="text-xs italic text-gray-500 dark:text-gray-400">
                                 {t('monitor.conversation.multi_turn_notice', '本轮无单一用户提问（包含工具交互或多轮上下文，详情见下方展开）')}
                             </div>
+                        ) : parsed.requestTruncated ? (
+                            <div className="text-xs italic text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                                <AlertTriangle size={13} className="shrink-0 text-amber-500" />
+                                {t('monitor.conversation.user_input_lost', '该日志产生于旧版本，超长请求只保存了开头，用户提问未入库；新版本已改为头尾保留')}
+                            </div>
                         ) : null}
 
                         {/* 多模态图片预览区（高性能缩略图 + 截断保护） */}
@@ -190,7 +195,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                             <div
                                                 key={img.id}
                                                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-100/70 dark:bg-blue-900/40 border border-dashed border-blue-300 dark:border-blue-700 text-xs"
-                                                title={t('monitor.conversation.image_truncated', '图片数据已截断保护 (超出 16KB)')}
+                                                title={t('monitor.conversation.image_truncated', '图片数据已截断保护（超出日志长度上限）')}
                                             >
                                                 <ShieldCheck size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
                                                 <div className="flex flex-col">

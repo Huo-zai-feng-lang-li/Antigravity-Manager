@@ -1178,7 +1178,8 @@
       "usage": "토큰",
       "duration": "소요 시간",
       "time": "시간",
-      "empty": "기록된 요청 없음"
+      "empty": "기록된 요청 없음",
+      "user": "사용자"
     },
     "details": {
       "title": "요청 상세",
@@ -1464,7 +1465,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "블랙리스트 스위치가 꺼져 있어 현재 규칙이 요청을 차단하지 않습니다.",
+      "whitelist_disabled_hint": "화이트리스트 모드가 꺼져 있어 현재 규칙이 적용되지 않습니다. 켜면 목록의 IP만 접근할 수 있습니다.",
+      "enable_now": "지금 활성화",
+      "error_switch": "전환에 실패했습니다",
+      "blacklist_auto_enabled": "블랙리스트에 추가했으며 차단이 자동으로 활성화되었습니다"
     }
   },
   "user_token": {

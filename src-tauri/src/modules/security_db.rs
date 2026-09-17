@@ -229,6 +229,16 @@ pub fn init_db() -> Result<(), String> {
     // Migration: Add username column to ip_access_logs
     let _ = conn.execute("ALTER TABLE ip_access_logs ADD COLUMN username TEXT", []);
 
+    // Migration v1: GeoIP 主数据源切换为百度，旧 ip-api 缓存（国内 IPv6 归属地
+    // 可能错误，如把新疆联通基站定位到北京）全部作废，下次访问时自动重新查询。
+    let user_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+    if user_version < 1 {
+        let _ = conn.execute("DELETE FROM ip_geo", []);
+        let _ = conn.execute("PRAGMA user_version = 1", []);
+    }
+
     Ok(())
 }
 

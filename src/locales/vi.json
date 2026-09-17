@@ -986,7 +986,8 @@
       "usage": "Tokens",
       "duration": "Thời gian",
       "time": "Thời điểm",
-      "empty": "Chưa có request nào được ghi lại"
+      "empty": "Chưa có request nào được ghi lại",
+      "user": "Người dùng"
     },
     "details": {
       "title": "Chi tiết Request",
@@ -1249,7 +1250,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "Công tắc danh sách đen đang tắt; các quy tắc sẽ không chặn yêu cầu nào.",
+      "whitelist_disabled_hint": "Chế độ danh sách trắng đang tắt; quy tắc tạm thời không hiệu lực. Khi bật, chỉ IP trong danh sách mới truy cập được.",
+      "enable_now": "Bật ngay",
+      "error_switch": "Chuyển đổi thất bại",
+      "blacklist_auto_enabled": "Đã thêm vào danh sách đen và tự động bật chặn"
     }
   },
   "user_token": {

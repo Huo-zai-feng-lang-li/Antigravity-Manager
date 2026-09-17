@@ -46,6 +46,8 @@ export interface ParsedConversation {
     errorMessage: string | null;
     /** 原始报文是否为合法 JSON */
     isRawJson: boolean;
+    /** 请求报文是否含截断标记（旧版"只存头部"日志的用户输入可能已物理丢失） */
+    requestTruncated: boolean;
 }
 
 /**
@@ -120,7 +122,7 @@ function processImageItem(rawUrlOrData: string, mime?: string, index: number = 0
             kind: 'truncated',
             mimeType: detectedMime,
             label: `多模态图片 #${index + 1} (已截断保护)`,
-            sizeHint: '超出 16KB · 日志安全截断'
+            sizeHint: '超出日志长度上限 · 仅占位'
         };
     }
 
@@ -397,65 +399,164 @@ function extractRequestInfo(json: any): {
 }
 
 /**
- * 正则回退扫描：当请求报文被截断导致非合法 JSON 时的抢救机制
- * 深度覆盖 "role": "user", "input": [...], "prompt": "..." 等常见格式
+ * 从截断/残缺报文中抢救多模态图片。
+ *
+ * 报文按"头部 + 尾部"落库后 JSON 已非法，无法走结构化解析：
+ * - 外链图片 URL 通常很短，尾部片段里可能完整保留，可直接预览；
+ * - 内联 base64 图片体积大，物理上不可能完整保留，只能给出占位卡片，
+ *   数量综合 data: 前缀、MIME 标记与后端截断标记 images=N 三方估计。
  */
-function fallbackExtractRequestFromTruncated(text: string): string | null {
-    if (!text || typeof text !== 'string') return null;
+function rescueImagesFromTruncated(text: string): ImageMediaItem[] {
+    if (!text || typeof text !== 'string') return [];
+    const items: ImageMediaItem[] = [];
+    const MAX_IMAGES = 8;
+
+    const decodeJsonString = (raw: string): string => {
+        try {
+            return JSON.parse(`"${raw}"`);
+        } catch {
+            return raw.replace(/\\u0026/g, '&').replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        }
+    };
+
+    // 1. 外链图片：OpenAI image_url / Claude source(url) / Gemini fileData
+    const urlPatterns: RegExp[] = [
+        /"image_url"\s*:\s*\{\s*"url"\s*:\s*"(https?:[^"\\]+)"/g,
+        /"source"\s*:\s*\{\s*"type"\s*:\s*"url"[\s\S]*?"url"\s*:\s*"(https?:[^"\\]+)"/g,
+        /"file(?:_)?[Dd]ata"\s*:\s*\{[\s\S]*?"file(?:_)?[Uu]ri"\s*:\s*"(https?:[^"\\]+)"/g,
+    ];
+    const seenUrls = new Set<string>();
+    for (const pattern of urlPatterns) {
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(text)) && items.length < MAX_IMAGES) {
+            const url = decodeJsonString(match[1]);
+            if (seenUrls.has(url)) continue;
+            seenUrls.add(url);
+            items.push({
+                id: `rescue-url-${items.length}`,
+                kind: 'url',
+                src: url,
+                mimeType: 'image/url',
+                label: `图片链接 #${items.length + 1}`,
+                sizeHint: '网络资源'
+            });
+        }
+    }
+
+    // 2. 完整内联 data URI（必须以引号收尾，尾部保留区内的小图可完整还原）
+    const completeDataUris: string[] = [];
+    const completeDataRe = /(data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+)"/g;
+    let dataMatch: RegExpExecArray | null;
+    while ((dataMatch = completeDataRe.exec(text)) && completeDataUris.length < MAX_IMAGES) {
+        if (!completeDataUris.includes(dataMatch[1])) completeDataUris.push(dataMatch[1]);
+    }
+    for (const uri of completeDataUris) {
+        items.push(processImageItem(uri, undefined, items.length));
+    }
+
+    // 3. 残缺内联图片数量估计（三种格式的标记互不重叠，取各自计数后与后端标记取最大）
+    const dataPrefixCount = (text.match(/data:image\/(?:png|jpeg|jpg|webp|gif);base64,/g) || []).length;
+    const brokenDataCount = Math.max(0, dataPrefixCount - completeDataUris.length);
+    const mimeMarkCount = (text.match(/"(?:media_type|mime_?[Tt]ype)"\s*:\s*"image\/(?:png|jpeg|jpg|webp|gif)"/g) || []).length;
+    const markerMatch = text.match(/\[truncated[^\]]*?;images=(\d+)/);
+    const markerCount = markerMatch ? parseInt(markerMatch[1], 10) || 0 : 0;
+    const inlineTotal = Math.max(brokenDataCount + completeDataUris.length, mimeMarkCount, markerCount);
+    const placeholderCount = Math.max(
+        0,
+        Math.min(MAX_IMAGES - items.length, inlineTotal - completeDataUris.length)
+    );
+    for (let i = 0; i < placeholderCount; i++) {
+        items.push({
+            id: `rescue-broken-${i}`,
+            kind: 'truncated',
+            mimeType: 'image/*',
+            label: `多模态图片 #${items.length + 1} (已截断保护)`,
+            sizeHint: '超出日志长度上限 · 仅占位'
+        });
+    }
+
+    return items;
+}
+
+/** 解码 JSON 字符串片段为可读文本 */
+function decodeJsonText(raw: string): string {
+    try {
+        return JSON.parse(`"${raw}"`);
+    } catch {
+        return raw.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t');
+    }
+}
+
+/**
+ * 正则回退扫描：当请求报文被截断导致非合法 JSON 时的抢救机制
+ *
+ * 深度覆盖 "role":"user"（content 字符串/数组）、Responses API "input"、
+ * "prompt" 等常见格式，同时抢救尾部片段中的多模态图片。
+ */
+function fallbackExtractRequestFromTruncated(text: string): {
+    prompt: string | null;
+    images: ImageMediaItem[];
+} {
+    if (!text || typeof text !== 'string') return { prompt: null, images: [] };
+
+    let prompt: string | null = null;
 
     // 1. 尝试寻找最后一个 "role": "user"
     const userRoleIdx = Math.max(text.lastIndexOf('"role": "user"'), text.lastIndexOf('"role":"user"'));
     if (userRoleIdx !== -1) {
-        const afterUser = text.substring(userRoleIdx);
-        // 闭合引号
+        // 只在 user role 之后的有限窗口内寻找，避免抓到后续 assistant 消息
+        const afterUser = text.substring(userRoleIdx, userRoleIdx + 6000);
+
+        // 1a. content 为字符串："content":"..."
         const contentMatch = afterUser.match(/"content":\s*"((?:[^"\\]|\\.)*)"/);
         if (contentMatch && contentMatch[1]) {
-            try {
-                return JSON.parse(`"${contentMatch[1]}"`);
-            } catch {
-                return contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
-            }
+            prompt = decodeJsonText(contentMatch[1]);
         }
-        // 未闭合双引号截断
-        const unclosedMatch = afterUser.match(/"content":\s*"([^"\\]*?)(?:\.\.\.\[truncated|$)/);
-        if (unclosedMatch && unclosedMatch[1]) {
-            return unclosedMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        // 1b. 未闭合双引号截断（content 字符串被切断）
+        if (!prompt) {
+            const unclosed = afterUser.match(/"content":\s*"([^"\\]*?)(?:\.\.\.\[truncated|$)/);
+            if (unclosed && unclosed[1]) prompt = decodeJsonText(unclosed[1]);
+        }
+        // 1c. content 为数组：{"type":"input_text","text":"..."} / {"type":"text","text":"..."}
+        if (!prompt) {
+            const arrayTextMatch = afterUser.match(
+                /"(?:input_text|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/
+            );
+            if (arrayTextMatch && arrayTextMatch[1]) prompt = decodeJsonText(arrayTextMatch[1]);
+        }
+        if (!prompt) {
+            const unclosedArray = afterUser.match(/"(?:input_text|text)"\s*:\s*"([^"\\]*?)(?:\.\.\.\[truncated|$)/);
+            if (unclosedArray && unclosedArray[1]) prompt = decodeJsonText(unclosedArray[1]);
         }
     }
 
-    // 2. 尝试扫描 Responses API 的 "input" 字段
-    const inputIdx = Math.max(text.lastIndexOf('"input": "'), text.lastIndexOf('"input":"'));
-    if (inputIdx !== -1) {
-        const afterInput = text.substring(inputIdx);
-        const match = afterInput.match(/"input":\s*"((?:[^"\\]|\\.)*)"/);
-        if (match && match[1]) {
-            try {
-                return JSON.parse(`"${match[1]}"`);
-            } catch {
-                return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    // 2. 尝试扫描 Responses API 的 "input" 字段（字符串形式）
+    if (!prompt) {
+        const inputIdx = Math.max(text.lastIndexOf('"input": "'), text.lastIndexOf('"input":"'));
+        if (inputIdx !== -1) {
+            const afterInput = text.substring(inputIdx);
+            const match = afterInput.match(/"input":\s*"((?:[^"\\]|\\.)*)"/);
+            if (match && match[1]) {
+                prompt = decodeJsonText(match[1]);
             }
-        }
-        const unclosedInput = afterInput.match(/"input":\s*"([^"\\]*?)(?:\.\.\.\[truncated|$)/);
-        if (unclosedInput && unclosedInput[1]) {
-            return unclosedInput[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+            if (!prompt) {
+                const unclosed = afterInput.match(/"input":\s*"([^"\\]*?)(?:\.\.\.\[truncated|$)/);
+                if (unclosed && unclosed[1]) prompt = decodeJsonText(unclosed[1]);
+            }
         }
     }
 
     // 3. 尝试扫描 "prompt": "..."
-    const promptIdx = Math.max(text.lastIndexOf('"prompt": "'), text.lastIndexOf('"prompt":"'));
-    if (promptIdx !== -1) {
-        const afterPrompt = text.substring(promptIdx);
-        const match = afterPrompt.match(/"prompt":\s*"((?:[^"\\]|\\.)*)"/);
-        if (match && match[1]) {
-            try {
-                return JSON.parse(`"${match[1]}"`);
-            } catch {
-                return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
-            }
+    if (!prompt) {
+        const promptIdx = Math.max(text.lastIndexOf('"prompt": "'), text.lastIndexOf('"prompt":"'));
+        if (promptIdx !== -1) {
+            const afterPrompt = text.substring(promptIdx);
+            const match = afterPrompt.match(/"prompt":\s*"((?:[^"\\]|\\.)*)"/);
+            if (match && match[1]) prompt = decodeJsonText(match[1]);
         }
     }
 
-    return null;
+    return { prompt, images: rescueImagesFromTruncated(text) };
 }
 
 /**
@@ -786,13 +887,26 @@ export function parseLogPayload(
 
     let { userPrompt, systemPrompt, allMessages, images, isChat } = extractRequestInfo(reqJson);
 
-    // 如果未通过 JSON 提取到提问，尝试截断修复扫描
-    if (!userPrompt && requestBody) {
-        const fallbackPrompt = fallbackExtractRequestFromTruncated(requestBody);
-        if (fallbackPrompt) {
-            userPrompt = fallbackPrompt;
+    // 请求体含截断标记时，尾部的用户输入/图片可能在结构化解析中丢失，
+    // 即使 reqJson 侥幸解析成功（头部片段补全），也要对全文做一次抢救扫描。
+    const requestTruncated = Boolean(requestBody && requestBody.includes('[truncated'));
+    if (requestBody && (!userPrompt || requestTruncated || images.length === 0)) {
+        const fallback = fallbackExtractRequestFromTruncated(requestBody);
+        if (!userPrompt && fallback.prompt) {
+            userPrompt = fallback.prompt;
             isChat = true;
-            allMessages.push({ role: 'user', content: fallbackPrompt });
+            allMessages.push({ role: 'user', content: fallback.prompt });
+        }
+        if (fallback.images.length > 0) {
+            const existingKeys = new Set(images.map(img => img.src || `${img.kind}:${img.mimeType}`));
+            for (const img of fallback.images) {
+                const key = img.src || `${img.kind}:${img.mimeType}`;
+                if (!existingKeys.has(key)) {
+                    images.push(img);
+                    existingKeys.add(key);
+                }
+            }
+            isChat = true;
         }
     }
 
@@ -826,6 +940,7 @@ export function parseLogPayload(
         modelAnswer,
         toolCalls,
         errorMessage,
-        isRawJson
+        isRawJson,
+        requestTruncated
     };
 }

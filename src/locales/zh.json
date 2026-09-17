@@ -1174,7 +1174,8 @@
       "usage": "Token 消耗",
       "duration": "耗时",
       "time": "时间",
-      "empty": "暂无请求记录"
+      "empty": "暂无请求记录",
+      "user": "用户"
     },
     "details": {
       "title": "请求详情",
@@ -1452,7 +1453,12 @@
       "add_white": "加入白名单",
       "blocked_tag": "已封禁",
       "whitelisted_tag": "已加白",
-      "from_stats_reason": "从统计页手动封禁"
+      "from_stats_reason": "从统计页手动封禁",
+      "blacklist_disabled_warning": "黑名单总开关未开启，当前规则不会拦截任何请求。",
+      "whitelist_disabled_hint": "白名单模式未开启，当前规则暂不生效，开启后仅允许名单内 IP 访问。",
+      "enable_now": "立即开启",
+      "error_switch": "开关切换失败，请重试",
+      "blacklist_auto_enabled": "已加入黑名单，拦截已自动开启"
     }
   },
   "user_token": {

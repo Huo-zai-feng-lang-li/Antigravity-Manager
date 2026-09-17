@@ -955,7 +955,8 @@
       "usage": "Token'lar",
       "duration": "Süre",
       "time": "Zaman",
-      "empty": "Kayıtlı istek yok"
+      "empty": "Kayıtlı istek yok",
+      "user": "Kullanıcı"
     },
     "details": {
       "title": "İstek Detayları",
@@ -1200,7 +1201,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "Kara liste anahtarı kapalı — mevcut kurallar hiçbir isteği engellemez.",
+      "whitelist_disabled_hint": "Beyaz liste modu kapalı — kurallar etkin değil. Açıldığında yalnızca listedeki IP'ler erişebilir.",
+      "enable_now": "Şimdi etkinleştir",
+      "error_switch": "Anahtarlama başarısız",
+      "blacklist_auto_enabled": "Kara listeye eklendi; engelleme otomatik etkinleştirildi"
     }
   },
   "user_token": {

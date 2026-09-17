@@ -14,6 +14,21 @@ export function isIpv6(ip: string): boolean {
     return displayIp(ip).includes(':');
 }
 
+/**
+ * 表格等窄空间使用的 IP 缩写：先还原 v4-mapped（::ffff:1.2.3.4 → 1.2.3.4），
+ * 再对超长纯 IPv6 保留前 2 组与末 1 组
+ * （如 2408:847a:712:6e98:1437:4fff:fedf:4e8f → 2408:847a…4e8f）。
+ * 仅用于展示，完整地址放在 title；纯 IPv6 技术上无法转为 IPv4。
+ */
+export function compactIp(ip: string, maxLen = 20): string {
+    if (!ip) return ip;
+    const shown = displayIp(ip);
+    if (shown.length <= maxLen) return shown;
+    const groups = shown.split(':');
+    if (groups.length < 5) return shown;
+    return `${groups.slice(0, 2).join(':')}…${groups.slice(-1).join(':')}`;
+}
+
 /** 本地分类（不查网）：loopback / private / linklocal / public */
 export type IpKind = 'loopback' | 'private' | 'linklocal' | 'public';
 

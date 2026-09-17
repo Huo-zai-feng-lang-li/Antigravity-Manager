@@ -30,6 +30,8 @@ interface ProxyRequestLog {
     output_tokens?: number;
     cached_tokens?: number;
     account_email?: string;
+    username?: string;
+    client_ip?: string;
     protocol?: string;  // "openai" | "anthropic" | "gemini"
 }
 
@@ -69,6 +71,7 @@ const LogTable: React.FC<LogTableProps> = ({
                         <th style={{ width: '220px' }}>{t('monitor.table.model')}</th>
                         <th style={{ width: '70px' }}>{t('monitor.table.protocol')}</th>
                         <th style={{ width: '140px' }}>{t('monitor.table.account')}</th>
+                        <th style={{ width: '90px' }}>{t('monitor.table.user')}</th>
                         <th style={{ width: '180px' }}>{t('monitor.table.path')}</th>
                         <th className="text-right" style={{ width: '90px' }}>{t('monitor.table.usage')}</th>
                         <th className="text-right" style={{ width: '80px' }}>{t('monitor.table.duration')}</th>
@@ -107,6 +110,9 @@ const LogTable: React.FC<LogTableProps> = ({
                             </td>
                             <td className="text-gray-600 dark:text-gray-400 truncate text-[10px]" style={{ width: '140px', maxWidth: '140px' }} title={log.account_email || ''}>
                                 {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
+                            </td>
+                            <td className="text-gray-600 dark:text-gray-400 truncate text-[11px]" style={{ width: '90px', maxWidth: '90px' }} title={log.username || ''}>
+                                {log.username || '-'}
                             </td>
                             <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
                             <td className="text-right text-[9px]" style={{ width: '90px' }}>

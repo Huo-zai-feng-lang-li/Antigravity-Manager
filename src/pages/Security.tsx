@@ -66,13 +66,15 @@ const Security: React.FC = () => {
                     </div>
                 )}
                 {activeTab === 'stats' && (
-                    <IpStatistics
-                        refreshKey={refreshKey}
-                        onJumpBlocked={() => {
-                            setLogsBlockedOnly(true);
-                            setActiveTab('logs');
-                        }}
-                    />
+                    <div className="h-full p-4">
+                        <IpStatistics
+                            refreshKey={refreshKey}
+                            onJumpBlocked={() => {
+                                setLogsBlockedOnly(true);
+                                setActiveTab('logs');
+                            }}
+                        />
+                    </div>
                 )}
                 {activeTab === 'blacklist' && (
                     <div className="h-full p-4">

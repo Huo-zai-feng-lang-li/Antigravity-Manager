@@ -4,7 +4,7 @@ import { Activity, ShieldAlert, Users, Globe, ShieldOff, ShieldCheck } from 'luc
 import { request as invoke } from '../../utils/request';
 import { showToast } from '../common/ToastContainer';
 import { formatCompactNumber } from '../../utils/format';
-import { describeIp } from '../../utils/ipFormat';
+import { describeIp, compactIp } from '../../utils/ipFormat';
 import type { IpStatsResponse, IpTokenStats, IpRanking } from '../../types/security';
 
 interface Props {
@@ -76,7 +76,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                     ...prev,
                     top_ips: prev.top_ips.map(r => r.client_ip === ip ? { ...r, is_blocked: true } : r),
                 } : prev);
-                showToast(t('security.rules.add_success'), 'success');
+                showToast(t('security.rules.blacklist_auto_enabled'), 'success');
             } else {
                 await invoke('add_ip_to_whitelist', { request: { ipPattern: ip, description: null } });
                 setWhitelisted(prev => new Set(prev).add(ip));
@@ -133,7 +133,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-2 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300">
                         <div className="stat-figure text-blue-500"><Activity size={32} /></div>
@@ -147,9 +147,11 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                         <div className="stat-value text-purple-500">{formatCompactNumber(stats.unique_ips)}</div>
                         <div className="stat-desc">{rangeLabel()}</div>
                     </div>
-                    <button
-                        type="button"
+                    <div
+                        role="button"
+                        tabIndex={0}
                         onClick={onJumpBlocked}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onJumpBlocked?.(); }}
                         className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300 text-left hover:border-red-300 transition-colors cursor-pointer"
                         title={t('security.stats.jump_blocked_tip')}
                     >
@@ -157,7 +159,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                         <div className="stat-title">{t('security.stats.blocked_requests')}</div>
                         <div className="stat-value text-red-500">{formatCompactNumber(stats.blocked_requests)}</div>
                         <div className="stat-desc">{t('security.stats.jump_blocked')}</div>
-                    </button>
+                    </div>
                 </div>
 
                 {/* Top IPs（访问排行，含一键拉黑/加白） */}
@@ -183,8 +185,8 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                                     return (
                                         <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
                                             <td className="font-bold text-gray-400">#{index + 1}</td>
-                                            <td className="font-mono font-medium">{desc.ip}</td>
-                                            <td className="text-xs text-gray-500">{desc.detail || '-'}</td>
+                                            <td className="font-mono font-medium" title={desc.ip}>{compactIp(desc.ip)}</td>
+                                            <td className="text-xs text-gray-600 dark:text-gray-300">{desc.detail || '-'}</td>
                                             <td className="text-right font-mono">{formatCompactNumber(ip.request_count)}</td>
                                             <td><RuleButtons ip={ip.client_ip} blocked={ip.is_blocked} /></td>
                                         </tr>
@@ -236,13 +238,14 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                                     else if (ip.total_tokens > 10000) colorClass = 'text-blue-500';
                                     const percentage = Math.min(100, Math.max(0, (ip.request_count / maxReqCount) * 100)) || 0;
                                     const blocked = stats.top_ips.find(r => r.client_ip === ip.client_ip)?.is_blocked;
+                                    const desc = describeIp(ip.client_ip, ip.geo, t);
                                     return (
                                         <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
                                             <td className="font-bold text-gray-400">#{index + 1}</td>
-                                            <td className="font-mono font-medium">
-                                                {describeIp(ip.client_ip, ip.geo, t).ip}
-                                                {describeIp(ip.client_ip, ip.geo, t).detail && (
-                                                    <div className="text-[11px] text-gray-400 font-normal">{describeIp(ip.client_ip, ip.geo, t).detail}</div>
+                                            <td className="font-mono font-medium" title={desc.ip}>
+                                                {compactIp(desc.ip)}
+                                                {desc.detail && (
+                                                    <div className="text-[11px] text-gray-500 dark:text-gray-400 font-normal">{desc.detail}</div>
                                                 )}
                                             </td>
                                             <td className="font-medium text-blue-600 dark:text-blue-400">{ip.username || '-'}</td>

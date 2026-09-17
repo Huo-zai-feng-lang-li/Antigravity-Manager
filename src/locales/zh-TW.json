@@ -1023,7 +1023,8 @@
       "usage": "Token 消耗",
       "duration": "耗時",
       "time": "時間",
-      "empty": "暫無請求紀錄"
+      "empty": "暫無請求紀錄",
+      "user": "使用者"
     },
     "details": {
       "title": "請求詳情",
@@ -1289,7 +1290,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "黑名單總開關未開啟，目前規則不會攔截任何請求。",
+      "whitelist_disabled_hint": "白名單模式未開啟，目前規則暫不生效，開啟後僅允許名單內 IP 存取。",
+      "enable_now": "立即開啟",
+      "error_switch": "開關切換失敗，請重試",
+      "blacklist_auto_enabled": "已加入黑名單，攔截已自動開啟"
     }
   },
   "user_token": {

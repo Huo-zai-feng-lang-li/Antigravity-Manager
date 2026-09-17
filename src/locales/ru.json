@@ -1178,7 +1178,8 @@
       "usage": "Токены",
       "duration": "Длительность",
       "time": "Время",
-      "empty": "Запросов не записано"
+      "empty": "Запросов не записано",
+      "user": "Пользователь"
     },
     "details": {
       "title": "Детали запроса",
@@ -1464,7 +1465,12 @@
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
       "whitelisted_tag": "Whitelisted",
-      "from_stats_reason": "Blocked manually from statistics"
+      "from_stats_reason": "Blocked manually from statistics",
+      "blacklist_disabled_warning": "Чёрный список выключен — текущие правила не блокируют запросы.",
+      "whitelist_disabled_hint": "Белый список выключен — правила не действуют. При включении доступ будет только у IP из списка.",
+      "enable_now": "Включить",
+      "error_switch": "Не удалось переключить",
+      "blacklist_auto_enabled": "Добавлено в чёрный список, блокировка включена автоматически"
     }
   },
   "user_token": {

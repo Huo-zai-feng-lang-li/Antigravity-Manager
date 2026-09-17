@@ -82,33 +82,82 @@ pub fn init_db() -> Result<(), String> {
     Ok(())
 }
 
-/// 单条请求日志中 request_body / response_body 的最大存储字节数。
-/// 防止超大请求体（如长对话上下文、完整工具定义）导致数据库无限膨胀。
-const BODY_STORE_LIMIT: usize = 16 * 1024;
+/// 报文落库时头部保留的最大字节数（模型参数/系统提示位于 JSON 头部）。
+const BODY_HEAD_LIMIT: usize = 12 * 1024;
+/// 报文落库时尾部保留的最大字节数（用户最后的提问、多模态图片位于 JSON 尾部）。
+const BODY_TAIL_LIMIT: usize = 12 * 1024;
 
-/// 截断过长的 body 字段，超限部分以截断标记结尾（保证不切坏 UTF-8 字符边界）。
-fn truncate_body(body: &str, limit: usize) -> String {
-    if body.len() <= limit {
-        return body.to_string();
+/// 在不截断 UTF-8 字符的前提下，取字符串的前 max_bytes 字节。
+fn safe_prefix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
     }
-    let mut end = limit;
-    while !body.is_char_boundary(end) {
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...[truncated {} chars]", &body[..end], body.len() - end)
+    &s[..end]
+}
+
+/// 在不截断 UTF-8 字符的前提下，取字符串的后 max_bytes 字节。
+fn safe_suffix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut start = s.len() - max_bytes;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
+}
+
+/// 统计报文中内联图片的数量（按 MIME 标记字节匹配，无需解析 JSON）。
+/// 覆盖 OpenAI(`data:image/`)、Anthropic(`media_type`)、Gemini REST(`mimeType`)
+/// 与 Gemini protobuf(`mime_type`) 四种写法；外链图片（http URL）不在此计数，
+/// 由前端解析器直接抢救 URL。
+fn count_inline_images(body: &str) -> usize {
+    let needles = [
+        "data:image/",
+        "\"media_type\":\"image/",
+        "\"mimeType\":\"image/",
+        "\"mime_type\":\"image/",
+    ];
+    needles
+        .iter()
+        .map(|needle| body.matches(needle).count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// 超长报文按"头部 + 尾部"保留，中间省略。
+///
+/// 单纯保留头部会把 JSON 尾部的用户输入与多模态图片整体切掉，
+/// 导致对话视图只能看到模型回答；头尾各保留一段后，前端解析器
+/// 还能从尾部抢救出最后一条用户消息和图片标记。标记中附带内联
+/// 图片数量，供前端为物理上不完整的 base64 图片生成占位卡片。
+fn truncate_body(body: &str) -> String {
+    if body.len() <= BODY_HEAD_LIMIT + BODY_TAIL_LIMIT {
+        return body.to_string();
+    }
+
+    let head = safe_prefix(body, BODY_HEAD_LIMIT);
+    let tail = safe_suffix(body, BODY_TAIL_LIMIT);
+    let omitted_bytes = body.len() - head.len() - tail.len();
+    let image_count = count_inline_images(body);
+
+    let marker = if image_count > 0 {
+        format!("...[truncated {omitted_bytes} bytes;images={image_count}]...")
+    } else {
+        format!("...[truncated {omitted_bytes} bytes]...")
+    };
+    format!("{head}{marker}{tail}")
 }
 
 pub fn save_log(log: &ProxyRequestLog) -> Result<(), String> {
     let conn = connect_db()?;
 
-    let request_body = log
-        .request_body
-        .as_deref()
-        .map(|b| truncate_body(b, BODY_STORE_LIMIT));
-    let response_body = log
-        .response_body
-        .as_deref()
-        .map(|b| truncate_body(b, BODY_STORE_LIMIT));
+    let request_body = log.request_body.as_deref().map(truncate_body);
+    let response_body = log.response_body.as_deref().map(truncate_body);
 
     conn.execute(
         "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username)
@@ -611,27 +660,41 @@ mod tests {
     #[test]
     fn test_truncate_body_short_stays_unchanged() {
         let s = "short body";
-        assert_eq!(truncate_body(s, BODY_STORE_LIMIT), s);
+        assert_eq!(truncate_body(s), s);
     }
 
     #[test]
-    fn test_truncate_body_long_is_truncated_with_marker() {
-        let long = "x".repeat(20 * 1024);
-        let out = truncate_body(&long, BODY_STORE_LIMIT);
+    fn test_truncate_body_long_keeps_head_and_tail() {
+        let mut long = "H".repeat(25 * 1024);
+        long.push_str("TAIL_MARKER_用户提问");
+        let out = truncate_body(&long);
         assert!(out.len() < long.len());
         assert!(out.contains("[truncated"));
-        assert!(out.ends_with("]"));
+        // 尾部内容必须保留（对话视图依赖尾部抢救用户输入）
+        assert!(out.ends_with("TAIL_MARKER_用户提问"));
+        // 头部内容必须保留
+        assert!(out.starts_with("HHHH"));
+        // 重新解析必须成功（UTF-8 边界安全）
+        assert!(String::from_utf8(out.into_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_truncate_body_reports_inline_image_count() {
+        let mut long = "x".repeat(25 * 1024);
+        long.push_str(r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"#);
+        let out = truncate_body(&long);
+        assert!(
+            out.contains("images=1"),
+            "marker should carry image count: {out}"
+        );
     }
 
     #[test]
     fn test_truncate_body_utf8_boundary_safe() {
-        // 中文是多字节 UTF-8，截断点必须落在字符边界，不能切坏字符
+        // 中文是多字节 UTF-8，头尾切割点必须落在字符边界，不能切坏字符
         let long = "你".repeat(10 * 1024);
-        let out = truncate_body(&long, 100);
-        assert!(out.len() <= 100 + "[truncated N chars]".len() + 12);
-        // 重新解析必须成功（说明没有切坏 UTF-8）
+        let out = truncate_body(&long);
         assert!(String::from_utf8(out.clone().into_bytes()).is_ok());
-        // 截断点本身必须是字符边界
-        assert!(out.is_char_boundary(out.len()));
+        assert!(out.contains("[truncated"));
     }
 }

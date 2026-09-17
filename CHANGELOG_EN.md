@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.8 (2026-09-17)**:
+        -   **[API Monitor Upgrade] Added Dual "Conversation View" & "Raw Payload" Modes in Details Drawer**:
+            -   **One-Click Dual View Switching**: Added a segmented pill switcher at the top of the request details drawer, defaulting to a clean and structured "💬 Conversation View" while keeping the "📄 Raw Payload" tab for low-level inspection.
+            -   **Multi-Protocol Conversation Parser (`logPayloadParser`)**: Unified parser engine supporting OpenAI, Claude, and Gemini streaming and non-streaming requests/responses, cleanly separating System Prompts, User Prompts, Thinking / Reasoning chains, Tool & Function Calls, Assistant Responses, and Error details.
+            -   **Truncated JSON Fault Tolerance**: Automatic closing and regex fallback extraction for truncated or non-standard JSON bodies caused by middleware buffer limits, ensuring zero frontend parsing crashes.
+            -   **Modular Dialogue Card Component (`ConversationView`)**: Card-based chat rendering with collapsible thinking process blocks, formatted tool call arguments, single-click copy buttons per block, chronologically structured turn history, and graceful empty state handling.
+            -   **Full i18n Alignment**: Added missing localization keys across Simplified Chinese (`zh.json`), Traditional Chinese (`zh-TW.json`), and English (`en.json`).
     *   **v4.8.7 (2026-09-14)**:
         -   **[Dark Mode UI Fix] Three Off-Light Backgrounds Corrected**:
             -   **Root cause**: When a daisyUI theme color (base-100/200) is combined with a Tailwind opacity modifier (/30 /50 /95), the dark: variant emits no effective rule in the built CSS and silently falls back to the light bg-gray-XX, leaving three surfaces mismatched in dark mode.

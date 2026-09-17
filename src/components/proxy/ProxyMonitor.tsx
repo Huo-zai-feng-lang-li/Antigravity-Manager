@@ -3,13 +3,15 @@ import { listen } from '@tauri-apps/api/event';
 import ModalDialog from '../common/ModalDialog';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../../utils/request';
-import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, User } from 'lucide-react';
+import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, User, MessageSquare, Code2 } from 'lucide-react';
 
 import { AppConfig } from '../../types/config';
 import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
+import { parseLogPayload } from './logPayloadParser';
+import { ConversationView } from './ConversationView';
 
 
 interface ProxyRequestLog {
@@ -153,6 +155,17 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const [isLoggingEnabled, setIsLoggingEnabled] = useState(false);
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
     const [copiedRequestId, setCopiedRequestId] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<'conversation' | 'raw'>('conversation');
+
+    const parsedConversation = useMemo(() => {
+        if (!selectedLog) return null;
+        return parseLogPayload(
+            selectedLog.request_body,
+            selectedLog.response_body,
+            selectedLog.status,
+            selectedLog.error
+        );
+    }, [selectedLog?.id, selectedLog?.request_body, selectedLog?.response_body, selectedLog?.status, selectedLog?.error]);
 
     const { accounts, fetchAccounts } = useAccountStore();
 
@@ -530,6 +543,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 logs={filteredLogs}
                 loading={loading}
                 onLogClick={async (log: ProxyRequestLog) => {
+                    setViewMode('conversation');
                     setLoadingDetail(true);
                     try {
                         const detail = await invoke<ProxyRequestLog>('get_proxy_log_detail', { logId: log.id });
@@ -653,75 +667,118 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                 )}
                             </div>
 
-                            {/* Payloads */}
-                            <div className="space-y-4">
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.request_payload')}</h3>
-                                        <button
-                                            type="button"
-                                            className="btn btn-ghost btn-xs gap-1"
-                                            onClick={async () => {
-                                                if (!selectedLog.request_body) return;
-                                                const success = await copyToClipboard(getCopyPayload(selectedLog.request_body));
-                                                if (success) {
-                                                    setCopiedRequestId(selectedLog.id);
-                                                    setTimeout(() => {
-                                                        setCopiedRequestId((current) => (current === selectedLog.id ? null : current));
-                                                    }, 2000);
-                                                }
-                                            }}
-                                            disabled={!selectedLog.request_body}
-                                            title={copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            aria-label={t('proxy.config.btn_copy')}
-                                        >
-                                            {copiedRequestId === selectedLog.id ? (
-                                                <CheckCircle size={12} className="text-green-500" />
-                                            ) : (
-                                                <Copy size={12} />
-                                            )}
-                                            <span className="text-[10px]">
-                                                {copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            </span>
-                                        </button>
-                                    </div>
-                                    <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.request_body)}</div>
+                            {/* View Switcher Tabs */}
+                            <div className="flex items-center justify-between border-b border-gray-200 dark:border-base-300 pb-2">
+                                <div className="flex items-center gap-1.5 p-1 bg-gray-100 dark:bg-base-200 rounded-lg">
+                                    <button
+                                        type="button"
+                                        onClick={() => setViewMode('conversation')}
+                                        className={`btn btn-xs rounded-md border-none transition-all gap-1.5 ${
+                                            viewMode === 'conversation'
+                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs font-bold'
+                                                : 'bg-transparent text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                                        }`}
+                                    >
+                                        <MessageSquare size={13} />
+                                        <span>{t('monitor.details.tab_conversation', '💬 对话视图')}</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setViewMode('raw')}
+                                        className={`btn btn-xs rounded-md border-none transition-all gap-1.5 ${
+                                            viewMode === 'raw'
+                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs font-bold'
+                                                : 'bg-transparent text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                                        }`}
+                                    >
+                                        <Code2 size={13} />
+                                        <span>{t('monitor.details.tab_raw', '📄 原始报文')}</span>
+                                    </button>
                                 </div>
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.response_payload')}</h3>
-                                        <button
-                                            type="button"
-                                            className="btn btn-ghost btn-xs gap-1"
-                                            onClick={async () => {
-                                                if (!selectedLog.response_body) return;
-                                                const success = await copyToClipboard(getCopyPayload(selectedLog.response_body));
-                                                if (success) {
-                                                    setCopiedRequestId(selectedLog.id ? `${selectedLog.id}-response` : null);
-                                                    setTimeout(() => {
-                                                        setCopiedRequestId((current) =>
-                                                            current === `${selectedLog.id}-response` ? null : current
-                                                        );
-                                                    }, 2000);
-                                                }
-                                            }}
-                                            disabled={!selectedLog.response_body}
-                                            title={copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            aria-label={t('proxy.config.btn_copy')}
-                                        >
-                                            {copiedRequestId === `${selectedLog.id}-response` ? (
-                                                <CheckCircle size={12} className="text-green-500" />
-                                            ) : (
-                                                <Copy size={12} />
-                                            )}
-                                            <span className="text-[10px]">
-                                                {copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            </span>
-                                        </button>
-                                    </div>
-                                    <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.response_body)}</div>
+
+                                <div className="text-[11px] text-gray-400 font-mono">
+                                    {selectedLog.protocol ? selectedLog.protocol.toUpperCase() : 'HTTP'}
                                 </div>
                             </div>
+
+                            {/* View Content */}
+                            {viewMode === 'conversation' && parsedConversation ? (
+                                <ConversationView
+                                    parsed={parsedConversation}
+                                    logId={selectedLog.id}
+                                    t={t}
+                                    onSwitchToRaw={() => setViewMode('raw')}
+                                />
+                            ) : (
+                                <div className="space-y-4">
+                                    <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.request_payload')}</h3>
+                                            <button
+                                                type="button"
+                                                className="btn btn-ghost btn-xs gap-1"
+                                                onClick={async () => {
+                                                    if (!selectedLog.request_body) return;
+                                                    const success = await copyToClipboard(getCopyPayload(selectedLog.request_body));
+                                                    if (success) {
+                                                        setCopiedRequestId(selectedLog.id);
+                                                        setTimeout(() => {
+                                                            setCopiedRequestId((current) => (current === selectedLog.id ? null : current));
+                                                        }, 2000);
+                                                    }
+                                                }}
+                                                disabled={!selectedLog.request_body}
+                                                title={copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
+                                                aria-label={t('proxy.config.btn_copy')}
+                                            >
+                                                {copiedRequestId === selectedLog.id ? (
+                                                    <CheckCircle size={12} className="text-green-500" />
+                                                ) : (
+                                                    <Copy size={12} />
+                                                )}
+                                                <span className="text-[10px]">
+                                                    {copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
+                                                </span>
+                                            </button>
+                                        </div>
+                                        <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.request_body)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.response_payload')}</h3>
+                                            <button
+                                                type="button"
+                                                className="btn btn-ghost btn-xs gap-1"
+                                                onClick={async () => {
+                                                    if (!selectedLog.response_body) return;
+                                                    const success = await copyToClipboard(getCopyPayload(selectedLog.response_body));
+                                                    if (success) {
+                                                        setCopiedRequestId(selectedLog.id ? `${selectedLog.id}-response` : null);
+                                                        setTimeout(() => {
+                                                            setCopiedRequestId((current) =>
+                                                                current === `${selectedLog.id}-response` ? null : current
+                                                            );
+                                                        }, 2000);
+                                                    }
+                                                }}
+                                                disabled={!selectedLog.response_body}
+                                                title={copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
+                                                aria-label={t('proxy.config.btn_copy')}
+                                            >
+                                                {copiedRequestId === `${selectedLog.id}-response` ? (
+                                                    <CheckCircle size={12} className="text-green-500" />
+                                                ) : (
+                                                    <Copy size={12} />
+                                                )}
+                                                <span className="text-[10px]">
+                                                    {copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
+                                                </span>
+                                            </button>
+                                        </div>
+                                        <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.response_body)}</div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

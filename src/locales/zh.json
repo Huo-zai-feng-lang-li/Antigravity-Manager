@@ -1178,6 +1178,8 @@
     },
     "details": {
       "title": "请求详情",
+      "tab_conversation": "💬 对话视图",
+      "tab_raw": "📄 原始报文",
       "request_payload": "请求报文 (Request)",
       "response_payload": "响应报文 (Response)",
       "duration": "耗时",
@@ -1189,6 +1191,20 @@
       "account_used": "使用账号",
       "id": "请求 ID",
       "payload_empty": "无数据"
+    },
+    "conversation": {
+      "non_chat_title": "非聊天对话接口",
+      "non_chat_desc": "该请求为系统探测、模型列表或专用协议接口，未包含标准对话问答。",
+      "view_raw_payload": "查看原始报文",
+      "system_prompt": "系统设定与提示词 (System Prompt)",
+      "user_prompt": "用户提问 (Prompt)",
+      "model_answer": "模型回答 (Response)",
+      "thinking": "深度思考过程 (Thinking / Reasoning)",
+      "tool_calls": "工具/函数调用 (Tool Calls)",
+      "history_context": "完整会话上下文",
+      "messages_count": "条消息",
+      "error_title": "请求异常与报错信息",
+      "chars": "字符"
     },
     "dialog": {
       "clear_title": "清除监控日志",

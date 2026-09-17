@@ -1027,6 +1027,8 @@
     },
     "details": {
       "title": "請求詳情",
+      "tab_conversation": "💬 對話檢視",
+      "tab_raw": "📄 原始封包",
       "request_payload": "請求封包 (Request)",
       "response_payload": "回應封包 (Response)",
       "duration": "耗時",
@@ -1038,6 +1040,20 @@
       "mapped_model": "路由後模型",
       "account_used": "使用帳號",
       "payload_empty": "無封包資料"
+    },
+    "conversation": {
+      "non_chat_title": "非聊天對話介面",
+      "non_chat_desc": "該請求為系統探測、模型列表或專用協定介面，未包含標準對話問答。",
+      "view_raw_payload": "檢視原始封包",
+      "system_prompt": "系統設定與提示詞 (System Prompt)",
+      "user_prompt": "用戶提問 (Prompt)",
+      "model_answer": "模型回答 (Response)",
+      "thinking": "深度思考過程 (Thinking / Reasoning)",
+      "tool_calls": "工具/函數調用 (Tool Calls)",
+      "history_context": "完整會話上下文",
+      "messages_count": "條訊息",
+      "error_title": "請求異常與報錯資訊",
+      "chars": "字符"
     },
     "dialog": {
       "clear_title": "清除監控紀錄",

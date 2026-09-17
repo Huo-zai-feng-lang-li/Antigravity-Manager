@@ -1185,6 +1185,8 @@
     },
     "details": {
       "title": "Request Details",
+      "tab_conversation": "💬 Conversation",
+      "tab_raw": "📄 Raw Payload",
       "request_payload": "Request Payload",
       "response_payload": "Response Payload",
       "duration": "Duration",
@@ -1196,6 +1198,20 @@
       "account_used": "Account Used",
       "id": "Request ID",
       "payload_empty": "No data"
+    },
+    "conversation": {
+      "non_chat_title": "Non-Chat Endpoint",
+      "non_chat_desc": "This request is a system check, model query, or non-chat endpoint with no conversation content.",
+      "view_raw_payload": "View Raw Payload",
+      "system_prompt": "System Prompt & Settings",
+      "user_prompt": "User Prompt",
+      "model_answer": "Model Response",
+      "thinking": "Thinking Process (Reasoning)",
+      "tool_calls": "Tool Calls",
+      "history_context": "Conversation History",
+      "messages_count": "messages",
+      "error_title": "Request Error Information",
+      "chars": "chars"
     },
     "dialog": {
       "clear_title": "Clear Proxy Logs",

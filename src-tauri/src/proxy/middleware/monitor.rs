@@ -3,13 +3,14 @@ use crate::proxy::monitor::ProxyRequestLog;
 use crate::proxy::server::AppState;
 use axum::{
     body::Body,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     middleware::Next,
     response::Response,
 };
 use base64::Engine as _;
 use futures::{Stream, StreamExt};
 use serde_json::Value;
+use std::net::SocketAddr;
 use std::time::Instant;
 
 const MAX_REQUEST_LOG_SIZE: usize = 100 * 1024 * 1024; // 100MB
@@ -378,6 +379,7 @@ pub(crate) fn extract_output_tokens(usage: &Value) -> Option<u32> {
 
 pub async fn monitor_middleware(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -392,21 +394,11 @@ pub async fn monitor_middleware(
 
     let start = Instant::now();
 
-    // Extract client IP from headers (X-Forwarded-For or X-Real-IP)
-    // IMPORTANT: Extract from Request headers, not Response headers (since we want the client's IP)
-    // Note: We need to do this BEFORE consuming the request body if possible, or extract it from the original request
-    let client_ip = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        });
+    // 客户端 IP 提取与 ip_filter 共用同一套可信规则；直连模式回退 TCP 对端地址，
+    // 保证本机/局域网直连（无代理头）的请求也能进入访问日志。
+    let trust = state.security.read().await.trust_mode();
+    let client_ip =
+        crate::modules::ip_util::pick_client_ip(request.headers(), Some(peer_addr.ip()), trust);
 
     let user_agent = request
         .headers()
@@ -545,6 +537,7 @@ pub async fn monitor_middleware(
         cached_tokens: None,
         protocol,
         username,
+        user_agent: user_agent.clone(),
     };
 
     if content_type.contains("text/event-stream") {

@@ -174,6 +174,7 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
                 protocol: row.get(15).unwrap_or(None),
                 client_ip: row.get(16).unwrap_or(None),
                 username: row.get(17).unwrap_or(None),
+                user_agent: None,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -248,6 +249,7 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
             protocol: row.get(15).unwrap_or(None),
             client_ip: row.get(16).unwrap_or(None),
             username: row.get(17).unwrap_or(None),
+            user_agent: None,
         })
     })
     .map_err(|e| e.to_string())
@@ -409,6 +411,7 @@ pub fn get_logs_filtered(
                     protocol: row.get(15).unwrap_or(None),
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
+                    user_agent: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -436,6 +439,7 @@ pub fn get_logs_filtered(
                     protocol: row.get(15).unwrap_or(None),
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
+                    user_agent: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -463,6 +467,7 @@ pub fn get_logs_filtered(
                     protocol: row.get(15).unwrap_or(None),
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
+                    user_agent: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -507,6 +512,7 @@ pub fn get_all_logs_for_export() -> Result<Vec<ProxyRequestLog>, String> {
                 protocol: row.get(15).unwrap_or(None),
                 client_ip: row.get(16).unwrap_or(None),
                 username: row.get(17).unwrap_or(None),
+                user_agent: None,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -528,15 +534,21 @@ pub struct IpTokenStats {
     pub output_tokens: i64,
     pub request_count: i64,
     pub username: Option<String>,
+    /// 归属地信息，仅查询响应填充。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub geo: Option<crate::modules::security_db::IpGeoInfo>,
 }
 
-/// Get token usage grouped by IP
+/// Get token usage grouped by IP. `hours <= 0` 表示不限制时间范围（全部）。
 pub fn get_token_usage_by_ip(limit: usize, hours: i64) -> Result<Vec<IpTokenStats>, String> {
     let conn = connect_db()?;
 
-    // Fix: Database stores timestamp in milliseconds, but we were calculating 'since' in seconds
-    // Convert 'hours' to milliseconds
-    let since = chrono::Utc::now().timestamp_millis() - (hours * 3600 * 1000);
+    // 数据库时间戳为毫秒；hours<=0 时 since=None，SQL 跳过时间过滤
+    let since: Option<i64> = if hours > 0 {
+        Some(chrono::Utc::now().timestamp_millis() - hours * 3600 * 1000)
+    } else {
+        None
+    };
 
     // [FIX] 不再从 request_logs 表获取 username，因为该字段可能为空
     // 先获取 IP 统计数据，然后再单独查询每个 IP 的用户名
@@ -549,7 +561,7 @@ pub fn get_token_usage_by_ip(limit: usize, hours: i64) -> Result<Vec<IpTokenStat
             COALESCE(SUM(output_tokens), 0) as output,
             COUNT(*) as cnt
          FROM request_logs
-         WHERE timestamp >= ?1 AND client_ip IS NOT NULL AND client_ip != ''
+         WHERE (?1 IS NULL OR timestamp >= ?1) AND client_ip IS NOT NULL AND client_ip != ''
          GROUP BY client_ip
          ORDER BY total DESC
          LIMIT ?2",
@@ -585,6 +597,7 @@ pub fn get_token_usage_by_ip(limit: usize, hours: i64) -> Result<Vec<IpTokenStat
             output_tokens,
             request_count,
             username,
+            geo: None,
         });
     }
 

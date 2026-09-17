@@ -137,6 +137,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'clear_ip_access_logs': { url: '/api/security/logs/clear', method: 'POST' },
   'get_ip_stats': { url: '/api/security/stats', method: 'GET' },
   'get_ip_token_stats': { url: '/api/security/token-stats', method: 'GET' },
+  'get_my_ip': { url: '/api/security/whoami', method: 'GET' },
   'get_ip_blacklist': { url: '/api/security/blacklist', method: 'GET' },
   'add_ip_to_blacklist': { url: '/api/security/blacklist', method: 'POST' },
   'remove_ip_from_blacklist': { url: '/api/security/blacklist', method: 'DELETE' },

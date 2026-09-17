@@ -125,14 +125,14 @@ mod integration_tests {
 
         // 添加已过期的临时封禁
         let _ = add_to_blacklist(
-            "expired.ban.test",
+            "203.0.113.60",
             Some("Temporary ban - should be expired"),
             Some(now - 60), // 1分钟前过期
             "test",
         );
 
-        // 查询时应该触发过期清理
-        let is_blocked = security_db::is_ip_in_blacklist("expired.ban.test").unwrap();
+        // 快照匹配时跳过已过期规则
+        let is_blocked = security_db::is_ip_in_blacklist("203.0.113.60").unwrap();
         assert!(!is_blocked, "Expired ban should not block");
 
         cleanup_test_data();
@@ -204,16 +204,15 @@ mod integration_tests {
 
         // 添加临时封禁（2小时后过期）
         let _ = add_to_blacklist(
-            "temp.ban.message",
+            "203.0.113.50",
             Some("Rate limit exceeded"),
             Some(now + 7200), // 2小时后
             "rate_limiter",
         );
 
-        // 获取封禁详情
-        let entry = security_db::get_blacklist_entry_for_ip("temp.ban.message")
-            .unwrap()
-            .unwrap();
+        // 获取封禁详情（内存快照，与中间件判定路径一致）
+        let rules = crate::proxy::security::ip_rules::IpRuleSet::load().unwrap();
+        let entry = rules.match_blacklist("203.0.113.50").unwrap();
 
         assert_eq!(entry.reason.as_deref(), Some("Rate limit exceeded"));
         assert!(entry.expires_at.is_some());
@@ -260,6 +259,7 @@ mod integration_tests {
             blocked: true,
             block_reason: Some("IP in blacklist".to_string()),
             username: None,
+            geo: None,
         };
 
         let save_result = security_db::save_ip_access_log(&log);
@@ -280,17 +280,18 @@ mod integration_tests {
     /// 测试场景：安全检查不显著影响正常请求性能
     ///
     /// 预期行为：
-    /// 1. 黑名单/白名单检查时间 < 5ms
-    /// 2. 与没有安全检查的基线相比，延迟增加 < 10ms
+    /// 命令层判定路径（is_ip_in_*，每次重新装载快照查库）的性能护栏：
+    /// 平均每次 < 5ms。注意代理热路径不查库，走 ip_filter 中的 Arc 内存快照，
+    /// 其性能由 benchmark_blacklist_lookup 与快照匹配单测覆盖。
     #[test]
-    fn test_scenario_performance_impact() {
+    fn test_scenario_command_path_check_performance() {
         let _test_lock = crate::modules::security_db::lock_security_test();
         let _ = init_db();
         cleanup_test_data();
 
         // 添加一些黑名单条目
         for i in 0..50 {
-            let _ = add_to_blacklist(&format!("perf.test.{}", i), None, None, "test");
+            let _ = add_to_blacklist(&format!("198.51.100.{i}"), None, None, "test");
         }
 
         // 添加一些 CIDR 规则
@@ -338,15 +339,15 @@ mod integration_tests {
         cleanup_test_data();
 
         // 添加数据
-        let _ = add_to_blacklist("persist.test.ip", Some("Persistence test"), None, "test");
-        let _ = add_to_whitelist("persist.white.ip", Some("Persistence test"));
+        let _ = add_to_blacklist("203.0.113.70", Some("Persistence test"), None, "test");
+        let _ = add_to_whitelist("203.0.113.71", Some("Persistence test"));
 
         // 重新初始化（实际上只是验证数据仍然可读）
         let _ = init_db();
 
         // 验证数据仍然存在
-        assert!(security_db::is_ip_in_blacklist("persist.test.ip").unwrap());
-        assert!(security_db::is_ip_in_whitelist("persist.white.ip").unwrap());
+        assert!(security_db::is_ip_in_blacklist("203.0.113.70").unwrap());
+        assert!(security_db::is_ip_in_whitelist("203.0.113.71").unwrap());
 
         cleanup_test_data();
     }
@@ -388,7 +389,7 @@ mod stress_tests {
         let start = Instant::now();
         for i in 0..count {
             let _ = add_to_blacklist(
-                &format!("stress.{}.{}.{}.{}", i / 256, (i / 16) % 16, i % 16, i),
+                &format!("10.20.{}.{}", i / 254, (i % 254) + 1),
                 None,
                 None,
                 "stress",
@@ -400,13 +401,7 @@ mod stress_tests {
         // 随机查找测试
         let start = Instant::now();
         for i in 0..100 {
-            let _ = is_ip_in_blacklist(&format!(
-                "stress.{}.{}.{}.{}",
-                i / 256,
-                (i / 16) % 16,
-                i % 16,
-                i
-            ));
+            let _ = is_ip_in_blacklist(&format!("10.20.{}.{}", i / 254, (i % 254) + 1));
         }
         let lookup_duration = start.elapsed();
         println!("100 lookups in large blacklist took {:?}", lookup_duration);
@@ -449,6 +444,7 @@ mod stress_tests {
                 blocked: false,
                 block_reason: None,
                 username: None,
+                geo: None,
             };
             let _ = save_ip_access_log(&log);
         }
@@ -479,7 +475,7 @@ mod stress_tests {
                 thread::spawn(move || {
                     for i in 0..ops_per_thread {
                         // 每个线程添加-查询-删除
-                        let ip = format!("concurrent.{}.{}", t, i);
+                        let ip = format!("10.30.{}.{}", t, i + 1);
                         if let Ok(entry) = add_to_blacklist(&ip, None, None, "concurrent") {
                             let _ = is_ip_in_blacklist(&ip);
                             let _ = remove_from_blacklist(&entry.id);

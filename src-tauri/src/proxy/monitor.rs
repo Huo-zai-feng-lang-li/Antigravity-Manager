@@ -24,6 +24,8 @@ pub struct ProxyRequestLog {
     pub cached_tokens: Option<u32>,
     pub protocol: Option<String>, // 协议类型: "openai", "anthropic", "gemini"
     pub username: Option<String>, // User token username
+    #[serde(default)]
+    pub user_agent: Option<String>, // 客户端 User-Agent（用于安全日志检索）
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -214,13 +216,14 @@ impl ProxyMonitor {
                     timestamp: log_to_save.timestamp / 1000, // ms to s
                     method: Some(log_to_save.method.clone()),
                     path: Some(log_to_save.url.clone()),
-                    user_agent: None, // We don't have UA in ProxyRequestLog easily accessible here without plumbing
+                    user_agent: log_to_save.user_agent.clone(),
                     status: Some(log_to_save.status as i32),
                     duration: Some(log_to_save.duration as i64),
                     api_key_hash: None,
                     blocked: false, // This comes from monitor, so it wasn't blocked by IP filter
                     block_reason: None,
                     username: log_to_save.username.clone(),
+                    geo: None,
                 };
 
                 if let Err(e) = crate::modules::security_db::save_ip_access_log(&security_log) {
@@ -250,6 +253,7 @@ impl ProxyMonitor {
                 cached_tokens: log.cached_tokens,
                 protocol: log.protocol.clone(),
                 username: log.username.clone(),
+                user_agent: log.user_agent.clone(),
             };
             let _ = app.emit("proxy://request", &log_summary);
         }

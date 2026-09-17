@@ -1,3 +1,7 @@
+pub mod ip_rules;
+
+pub use crate::modules::ip_util;
+
 use crate::proxy::config::{ProxyAuthMode, ProxyConfig, SecurityMonitorConfig};
 
 #[derive(Debug, Clone)]
@@ -22,6 +26,26 @@ impl ProxySecurityConfig {
             port: config.port,
             security_monitor: config.security_monitor.clone(),
         }
+    }
+
+    /// 当前部署形态下的代理头信任模式（供 IP 提取共用）。
+    pub fn trust_mode(&self) -> ip_util::TrustMode {
+        if self.public_tunnel_active {
+            ip_util::TrustMode::Cloudflare
+        } else if self.security_monitor.trust_proxy_headers {
+            ip_util::TrustMode::ProxyHops(1)
+        } else {
+            ip_util::TrustMode::Direct
+        }
+    }
+
+    /// 用新的 [`ProxyConfig`] 重建运行态，但保留运行期由 cloudflared 启停翻转的
+    /// `public_tunnel_active`——该状态不来自磁盘配置，重建时丢失会把 Cloudflare
+    /// 信任模式静默打回 Direct。Tauri 与 Web 两条配置热更新路径都必须走这里。
+    pub fn rebuild_preserving_tunnel(&mut self, config: &ProxyConfig) {
+        let was_tunnel_active = self.public_tunnel_active;
+        *self = Self::from_proxy_config(config);
+        self.public_tunnel_active = was_tunnel_active;
     }
 
     pub fn effective_auth_mode(&self) -> ProxyAuthMode {
@@ -96,5 +120,52 @@ mod tests {
             s.effective_auth_mode(),
             ProxyAuthMode::AllExceptHealth
         ));
+    }
+
+    #[test]
+    fn trust_mode_resolves_three_states() {
+        let mut s = ProxySecurityConfig {
+            auth_mode: ProxyAuthMode::Auto,
+            api_key: "sk-test".to_string(),
+            admin_password: None,
+            allow_lan_access: false,
+            public_tunnel_active: false,
+            port: 8080,
+            security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
+        };
+
+        // 默认直连
+        assert!(matches!(s.trust_mode(), ip_util::TrustMode::Direct));
+
+        // 开启代理头信任
+        s.security_monitor.trust_proxy_headers = true;
+        assert!(matches!(s.trust_mode(), ip_util::TrustMode::ProxyHops(1)));
+
+        // 隧道激活时 Cloudflare 优先于代理头开关
+        s.public_tunnel_active = true;
+        assert!(matches!(s.trust_mode(), ip_util::TrustMode::Cloudflare));
+    }
+
+    #[test]
+    fn rebuild_preserves_tunnel_state() {
+        // 运行态处于 Cloudflare 隧道模式
+        let mut s = ProxySecurityConfig {
+            auth_mode: ProxyAuthMode::Auto,
+            api_key: "sk-test".to_string(),
+            admin_password: None,
+            allow_lan_access: false,
+            public_tunnel_active: true,
+            port: 8080,
+            security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
+        };
+
+        // 用磁盘默认配置重建（from_proxy_config 会把隧道态写死为 false）
+        s.rebuild_preserving_tunnel(&ProxyConfig::default());
+
+        assert!(
+            s.public_tunnel_active,
+            "tunnel state must survive config rebuild, otherwise trust mode drops to Direct"
+        );
+        assert!(matches!(s.trust_mode(), ip_util::TrustMode::Cloudflare));
     }
 }

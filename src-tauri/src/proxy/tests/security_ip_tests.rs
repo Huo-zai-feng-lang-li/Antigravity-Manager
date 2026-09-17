@@ -12,8 +12,8 @@
 mod security_db_tests {
     use crate::modules::security_db::{
         add_to_blacklist, add_to_whitelist, cleanup_old_ip_logs, clear_ip_access_logs,
-        get_blacklist, get_blacklist_entry_for_ip, get_ip_access_logs, get_ip_access_logs_count,
-        get_ip_stats, get_whitelist, init_db, is_ip_in_blacklist, is_ip_in_whitelist,
+        get_blacklist, get_ip_access_logs, get_ip_access_logs_count, get_ip_stats, get_whitelist,
+        increment_blacklist_hit, init_db, is_ip_in_blacklist, is_ip_in_whitelist,
         remove_from_blacklist, remove_from_whitelist, save_ip_access_log, IpAccessLog,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -143,14 +143,11 @@ mod security_db_tests {
             "admin",
         );
 
-        // 获取条目详情
-        let entry_result = get_blacklist_entry_for_ip("172.16.0.50");
-        assert!(entry_result.is_ok());
-
-        let entry = entry_result.unwrap();
-        assert!(entry.is_some());
-
-        let entry = entry.unwrap();
+        // 获取条目详情（走内存快照，与中间件判定路径一致）
+        let rules = crate::proxy::security::ip_rules::IpRuleSet::load().unwrap();
+        let entry = rules
+            .match_blacklist("172.16.0.50")
+            .expect("entry should be matched by snapshot");
         assert_eq!(entry.ip_pattern, "172.16.0.50");
         assert_eq!(entry.reason.as_deref(), Some("Abuse detected"));
         assert_eq!(entry.created_by, "admin");
@@ -279,16 +276,14 @@ mod security_db_tests {
 
         // 添加一个已过期的条目
         let _ = add_to_blacklist(
-            "expired.test.ip",
+            "203.0.113.82",
             Some("Already expired"),
             Some(now_timestamp() - 60), // 1分钟前过期
             "test",
         );
 
-        // 过期条目应该被自动清理
-        let is_blocked = is_ip_in_blacklist("expired.test.ip");
-        // 注意：取决于实现，过期条目可能在查询时被清理
-        // 根据 security_db.rs 的实现，get_blacklist_entry_for_ip 会先清理过期条目
+        // 快照匹配跳过已过期规则
+        let is_blocked = is_ip_in_blacklist("203.0.113.82");
         assert!(!is_blocked.unwrap(), "Expired entry should be cleaned up");
 
         cleanup_test_data();
@@ -302,14 +297,14 @@ mod security_db_tests {
 
         // 添加一个未过期的条目
         let _ = add_to_blacklist(
-            "not.expired.ip",
+            "203.0.113.80",
             Some("Will expire later"),
             Some(now_timestamp() + 3600), // 1小时后过期
             "test",
         );
 
         // 未过期条目应该仍然生效
-        assert!(is_ip_in_blacklist("not.expired.ip").unwrap());
+        assert!(is_ip_in_blacklist("203.0.113.80").unwrap());
 
         cleanup_test_data();
     }
@@ -322,14 +317,14 @@ mod security_db_tests {
 
         // 添加永久封禁 (无过期时间)
         let _ = add_to_blacklist(
-            "permanent.block.ip",
+            "203.0.113.81",
             Some("Permanent ban"),
             None, // 无过期时间
             "test",
         );
 
         // 永久封禁应该始终生效
-        assert!(is_ip_in_blacklist("permanent.block.ip").unwrap());
+        assert!(is_ip_in_blacklist("203.0.113.81").unwrap());
 
         cleanup_test_data();
     }
@@ -398,6 +393,7 @@ mod security_db_tests {
             blocked: false,
             block_reason: None,
             username: None,
+            geo: None,
         };
 
         let save_result = save_ip_access_log(&log);
@@ -438,6 +434,7 @@ mod security_db_tests {
             blocked: false,
             block_reason: None,
             username: None,
+            geo: None,
         };
         let _ = save_ip_access_log(&normal_log);
 
@@ -455,6 +452,7 @@ mod security_db_tests {
             blocked: true,
             block_reason: Some("IP in blacklist".to_string()),
             username: None,
+            geo: None,
         };
         let _ = save_ip_access_log(&blocked_log);
 
@@ -487,6 +485,7 @@ mod security_db_tests {
                 blocked: false,
                 block_reason: None,
                 username: None,
+                geo: None,
             };
             save_ip_access_log(&log).unwrap();
         }
@@ -496,6 +495,109 @@ mod security_db_tests {
             .unwrap()
             .is_empty());
         assert_eq!(get_ip_access_logs_count(Some(injection), false).unwrap(), 0);
+
+        cleanup_test_data();
+    }
+
+    /// LIKE 通配符（%、_、\）必须被转义为字面量，否则搜索 "50%" 会匹配到 "50X..."。
+    #[test]
+    fn test_access_log_search_escapes_like_wildcards() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
+        let _ = init_db();
+        cleanup_test_data();
+
+        let cases: &[(&str, &str)] = &[
+            ("203.0.113.10", "/promo/50%off"),
+            ("203.0.113.11", "/promo/50Xoff"), // % 的干扰项
+            ("203.0.113.12", "/labels/a_b"),
+            ("203.0.113.13", "/labels/aXb"), // _ 的干扰项
+            ("203.0.113.14", r"/path/with\slash"),
+        ];
+        for (ip, path) in cases {
+            let log = IpAccessLog {
+                id: uuid::Uuid::new_v4().to_string(),
+                client_ip: ip.to_string(),
+                timestamp: now_timestamp(),
+                method: Some("GET".to_string()),
+                path: Some(path.to_string()),
+                user_agent: None,
+                status: Some(200),
+                duration: Some(10),
+                api_key_hash: None,
+                blocked: false,
+                block_reason: None,
+                username: None,
+                geo: None,
+            };
+            save_ip_access_log(&log).unwrap();
+        }
+
+        // "%" 被当作字面百分号：只命中 50%off，不命中 50Xoff
+        assert_eq!(get_ip_access_logs_count(Some("50%"), false).unwrap(), 1);
+        // "_" 被当作字面下划线：只命中 a_b，不命中 aXb
+        assert_eq!(get_ip_access_logs_count(Some("a_b"), false).unwrap(), 1);
+        // "\" 被当作字面反斜杠
+        assert_eq!(
+            get_ip_access_logs_count(Some(r"with\slash"), false).unwrap(),
+            1
+        );
+        // 空字符串与 None 同口径：返回全量
+        assert_eq!(get_ip_access_logs_count(Some(""), false).unwrap(), 5);
+        assert_eq!(
+            get_ip_access_logs(10, 0, Some("  "), false).unwrap().len(),
+            5
+        );
+
+        cleanup_test_data();
+    }
+
+    /// 空表统计必须经 COALESCE 返回 0 而不是 rusqlite 报错（P1 崩溃回归）。
+    #[test]
+    fn test_ip_stats_empty_table_returns_zero() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
+        let _ = init_db();
+        cleanup_test_data();
+
+        for window in [None, Some(1), Some(24), Some(0)] {
+            let stats = get_ip_stats(window).expect("empty table must not error");
+            assert_eq!(stats.total_requests, 0, "window={window:?}");
+            assert_eq!(stats.unique_ips, 0, "window={window:?}");
+            assert_eq!(stats.blocked_count, 0, "window={window:?}");
+        }
+
+        cleanup_test_data();
+    }
+
+    /// IPv6 CIDR 端到端：写入名单后内存快照按网段命中。
+    #[test]
+    fn test_ipv6_cidr_blacklist_end_to_end() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
+        let _ = init_db();
+        cleanup_test_data();
+
+        add_to_blacklist("240e:1234::/32", Some("v6 range"), None, "test").unwrap();
+
+        assert!(is_ip_in_blacklist("240e:1234:dead::1").unwrap());
+        assert!(is_ip_in_blacklist("240e:1234:ffff::beef").unwrap());
+        assert!(!is_ip_in_blacklist("240e:1235::1").unwrap());
+        assert!(!is_ip_in_blacklist("8.8.8.8").unwrap());
+
+        cleanup_test_data();
+    }
+
+    /// IPv4-mapped IPv6（::ffff:1.2.3.4）必须归约到对应 v4 名单，防止混淆绕过。
+    #[test]
+    fn test_v4_mapped_ipv6_matches_v4_rules() {
+        let _test_lock = crate::modules::security_db::lock_security_test();
+        let _ = init_db();
+        cleanup_test_data();
+
+        add_to_blacklist("8.8.8.8", Some("mapped black"), None, "test").unwrap();
+        add_to_whitelist("9.9.9.9", Some("mapped white")).unwrap();
+
+        assert!(is_ip_in_blacklist("::ffff:8.8.8.8").unwrap());
+        assert!(is_ip_in_whitelist("::ffff:9.9.9.9").unwrap());
+        assert!(!is_ip_in_blacklist("::ffff:8.8.4.4").unwrap());
 
         cleanup_test_data();
     }
@@ -529,17 +631,18 @@ mod security_db_tests {
                     None
                 },
                 username: None,
+                geo: None,
             };
             let _ = save_ip_access_log(&log);
         }
 
         // 添加黑名单和白名单条目
-        let _ = add_to_blacklist("stats.black.1", None, None, "test");
-        let _ = add_to_blacklist("stats.black.2", None, None, "test");
-        let _ = add_to_whitelist("stats.white.1", None);
+        let _ = add_to_blacklist("203.0.113.41", None, None, "test");
+        let _ = add_to_blacklist("203.0.113.42", None, None, "test");
+        let _ = add_to_whitelist("203.0.113.43", None);
 
         // 获取统计
-        let stats = get_ip_stats();
+        let stats = get_ip_stats(None);
         assert!(stats.is_ok());
 
         let stats = stats.unwrap();
@@ -579,6 +682,7 @@ mod security_db_tests {
             blocked: false,
             block_reason: None,
             username: None,
+            geo: None,
         };
         let _ = save_ip_access_log(&old_log);
 
@@ -596,6 +700,7 @@ mod security_db_tests {
             blocked: false,
             block_reason: None,
             username: None,
+            geo: None,
         };
         let _ = save_ip_access_log(&new_log);
 
@@ -631,7 +736,7 @@ mod security_db_tests {
             .map(|i| {
                 thread::spawn(move || {
                     // 每个线程添加不同的 IP
-                    let ip = format!("concurrent.test.{}", i);
+                    let ip = format!("10.40.0.{}", i + 1);
                     let _ = add_to_blacklist(&ip, Some("Concurrent test"), None, "test");
 
                     // 验证自己添加的 IP
@@ -662,11 +767,11 @@ mod security_db_tests {
         cleanup_test_data();
 
         // 第一次添加应该成功
-        let result1 = add_to_blacklist("duplicate.test.ip", Some("First"), None, "test");
+        let result1 = add_to_blacklist("203.0.113.10", Some("First"), None, "test");
         assert!(result1.is_ok());
 
         // 第二次添加相同 IP 应该失败 (UNIQUE constraint)
-        let result2 = add_to_blacklist("duplicate.test.ip", Some("Second"), None, "test");
+        let result2 = add_to_blacklist("203.0.113.10", Some("Second"), None, "test");
         assert!(result2.is_err(), "Duplicate IP should fail");
 
         cleanup_test_data();
@@ -695,12 +800,13 @@ mod security_db_tests {
 
         // 测试包含特殊字符的原因
         let reason = "Test with 'quotes' and \"double quotes\" and emoji 🚫";
-        let result = add_to_blacklist("special.char.test", Some(reason), None, "test");
+        let result = add_to_blacklist("203.0.113.20", Some(reason), None, "test");
         assert!(result.is_ok());
 
-        let entry = get_blacklist_entry_for_ip("special.char.test")
-            .unwrap()
-            .unwrap();
+        let rules = crate::proxy::security::ip_rules::IpRuleSet::load().unwrap();
+        let entry = rules
+            .match_blacklist("203.0.113.20")
+            .expect("entry should be matched by snapshot");
         assert_eq!(entry.reason.as_deref(), Some(reason));
 
         cleanup_test_data();
@@ -713,20 +819,28 @@ mod security_db_tests {
         cleanup_test_data();
 
         // 添加一个黑名单条目
-        let _ = add_to_blacklist("hit.count.test", Some("Count test"), None, "test");
+        let _ = add_to_blacklist("203.0.113.30", Some("Count test"), None, "test");
 
-        // 多次查询应该增加 hit_count
+        // 拦截命中时递增计数
+        let blacklist = get_blacklist().unwrap();
+        let entry = blacklist
+            .iter()
+            .find(|e| e.ip_pattern == "203.0.113.30")
+            .expect("entry should exist");
         for _ in 0..5 {
-            let _ = get_blacklist_entry_for_ip("hit.count.test");
+            increment_blacklist_hit(&entry.id).unwrap();
         }
 
         // 检查 hit_count
         let blacklist = get_blacklist().unwrap();
-        let entry = blacklist.iter().find(|e| e.ip_pattern == "hit.count.test");
-        assert!(entry.is_some());
+        let entry = blacklist
+            .iter()
+            .find(|e| e.ip_pattern == "203.0.113.30")
+            .expect("entry should exist");
         assert!(
-            entry.unwrap().hit_count >= 5,
-            "Hit count should be at least 5"
+            entry.hit_count >= 5,
+            "Hit count should be at least 5, got {}",
+            entry.hit_count
         );
 
         cleanup_test_data();
@@ -742,23 +856,30 @@ mod ip_filter_middleware_tests {
     // 注意：中间件测试需要模拟 HTTP 请求，这里提供测试框架
     // 实际的集成测试应该在启动完整服务后进行
 
-    /// 验证 IP 提取逻辑的正确性
+    /// 直连模式必须忽略可伪造的 X-Forwarded-For，只认 TCP 对端；
+    /// 显式代理模式才采信代理头（修复 P0 绕过漏洞的回归测试）。
     #[test]
-    fn test_ip_extraction_priority() {
-        let _test_lock = crate::modules::security_db::lock_security_test();
-        // X-Forwarded-For 应该优先于 X-Real-IP
-        // X-Real-IP 应该优先于 ConnectInfo
-        // 这里只验证逻辑概念，实际测试需要构造 HTTP 请求
+    fn test_direct_mode_ignores_spoofed_xff() {
+        use crate::modules::ip_util::{pick_client_ip, TrustMode};
+        use axum::http::HeaderMap;
+        use std::net::SocketAddr;
 
-        // 场景 1: X-Forwarded-For 有多个 IP，取第一个
-        let xff_header = "203.0.113.1, 198.51.100.2, 192.0.2.3";
-        let first_ip = xff_header.split(',').next().unwrap().trim();
-        assert_eq!(first_ip, "203.0.113.1");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.9, 198.51.100.2".parse().unwrap(),
+        );
+        let peer: SocketAddr = "192.168.1.10:54321".parse().unwrap();
 
-        // 场景 2: 单个 IP
-        let single_ip = "10.0.0.1";
-        let parsed = single_ip.split(',').next().unwrap().trim();
-        assert_eq!(parsed, "10.0.0.1");
+        let direct = pick_client_ip(&headers, Some(peer.ip()), TrustMode::Direct)
+            .expect("peer IP must be used");
+        assert_eq!(direct, "192.168.1.10");
+
+        // 一层可信代理：XFF 最右一跳由紧邻代理写入（攻击者真实地址），
+        // 左侧 203.0.113.9 是攻击者可伪造的内容，必须取最右。
+        let proxied = pick_client_ip(&headers, Some(peer.ip()), TrustMode::ProxyHops(1))
+            .expect("XFF must be used in proxy mode");
+        assert_eq!(proxied, "198.51.100.2");
     }
 }
 
@@ -787,23 +908,24 @@ mod performance_benchmarks {
         }
 
         for i in 0..100 {
-            let _ = add_to_blacklist(&format!("bench.ip.{}", i), Some("Benchmark"), None, "test");
+            let _ = add_to_blacklist(&format!("203.0.113.{i}"), Some("Benchmark"), None, "test");
         }
 
-        // 执行 1000 次查找
+        // 执行 1000 次查找（每次 load 快照，模拟命令层判定路径）
         let start = Instant::now();
         for _ in 0..1000 {
-            let _ = is_ip_in_blacklist("bench.ip.50");
+            let _ = is_ip_in_blacklist("203.0.113.50");
         }
         let duration = start.elapsed();
 
         println!("1000 blacklist lookups took: {:?}", duration);
         println!("Average per lookup: {:?}", duration / 1000);
 
-        // 性能断言：平均查找应该在 1ms 以内
+        // 性能断言：1000 次命令层判定（每次含快照装载查库）总时长 < 5s。
+        // 注意这不是代理热路径；热路径走 Arc 内存快照，见 ip_filter 中间件。
         assert!(
             duration.as_millis() < 5000,
-            "Blacklist lookup should be fast (< 5ms avg)"
+            "1000 snapshot lookups should finish within 5s, took {duration:?}"
         );
 
         // 清理

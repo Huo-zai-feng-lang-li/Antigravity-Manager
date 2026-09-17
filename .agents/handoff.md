@@ -1,4 +1,41 @@
-# 最新接续状态 (2026-09-11 v4.7.6 发布与规则固化闭环)
+# 最新接续状态 (2026-09-16 IP 管理/安全监控性能·逻辑·交互闭环，未提交)
+
+> 本节为最新；下文 v4.7.6 章节为历史基线（623 测试全绿）。本次改动**尚未 git commit**，且工作区混有用户预存的无关未提交改动（ProxyMonitor.tsx、ConversationView.tsx、logPayloadParser.ts 等），提交时需只 add 本章节列出的文件。
+
+## 交付结论
+
+IP 管理五个子功能（访问日志、统计分析、黑名单、白名单、安全配置）端到端闭环完成，独立子 Agent 审计（无 P0，3 P1 已全部修复并复核）。
+
+- 验证硬证据：`cargo test --lib` **665 passed / 0 failed**（净增 42 测试）；`cargo fmt --check` 0；`cargo check --tests` 本次文件零 warning；`npm run build` 通过；12 locale security key 程序化 diff 全覆盖（en 基准 159 叶子 key）。
+- 计划文档：`.agents/plan-安全监控UIUX优化.md`（24 项问题基线、10 阶段全部勾选、10 条验收标准）。
+- 审计报告：子 Agent 产物 backend-audit.md / frontend-audit.md（在 session agents 目录 artifacts 下）。
+
+## 核心改动
+
+后端（src-tauri/）：
+- 新增 `modules/ip_util.rs`（IPv4/IPv6/CIDR 校验、classify_ip、TrustMode{Direct,ProxyHops(n),Cloudflare}、pick_client_ip；Direct 只认 ConnectInfo 防 XFF 伪造，ProxyHops 取 XFF 从右第 n 跳，Cloudflare 优先 cf-connecting-ip）、`proxy/security/ip_rules.rs`（黑白名单内存快照 Arc 原子替换，热路径零磁盘 IO）、`modules/geoip.rs`（ip-api.com batch 异步 enrichment，单飞 AtomicBool、5s 超时、100/批、成功 30 天 TTL/失败 1h、开关关闭零外发）。
+- `modules/security_db.rs`：ip_geo 表与 CRUD、四字段（IP/路径/UA/用户名）OR LIKE 搜索带 ESCAPE 转义、get_ip_stats(Option<hours>) COALESCE 修空表崩溃、过期过滤、日志 20000 条 cap、clear_* 单条 SQL、stale geo 单条 IN 查询。
+- `proxy/middleware/ip_filter.rs` 整体重写：快照匹配、ConnectInfo、trust_mode、回环无条件放行防自锁、block_message 生效、拦截日志+hit_count 合并单个 spawn_blocking。
+- `proxy/server.rs`：AppState/AxumServer 注入 ip_rules、启动装载失败用空集（白名单 fail-closed）、写后 reload、HTTP handlers 加 400 校验/hours/geo enrich、GET /api/security/whoami、**新增 `ProxySecurityConfig::rebuild_preserving_tunnel()`（proxy/security.rs）统一 Tauri/Web 配置热更新，保留运行态 public_tunnel_active**。
+- `commands/security.rs`：State 注入、hours 贯通、get_my_ip(Tauri 固定回环)+build_whoami、validate_pattern、get_ip_access_logs 改平铺参数（修 Tauri 桌面端单 struct 参数契约坑）。
+- `proxy/config.rs`：SecurityMonitorConfig 加 trust_proxy_headers(默认 false)/geoip_enabled(默认 true)，serde default。
+- 其余：monitor 中间件 pick_client_ip 统一提取+直连无日志修复、ProxyRequestLog 加 user_agent 并贯通 openai/warmup/proxy_db 构造点、proxy_db token stats hours<=0 全部+geo、lib.rs 注册 get_my_ip。
+
+前端（src/）：
+- 新增 types/security.ts、utils/ipFormat.ts（v4-mapped 还原、本地分类、归属地文本、v4/v6/CIDR 校验且拒前导零与后端对齐）、components/security/useIpRuleList.ts + IpRuleManager.tsx（黑白名单合并：常驻删除+ModalDialog 确认、清空确认、实时校验、过期预设永久/1时/24时/7天/30天/自定义最小1小时、命中次数、剩余有效期、白名单空名单红警）。
+- 重写 IpAccessLogs（通用 Pagination、350ms 防抖、筛选回第1页、清空回第1页、空态三级含一键开日志、行展开 UA/原因、归属地列、错误重试、GeoIP 每查询周期最多补刷一次）、IpStatistics（时日周月全部联动卡片+Top IP、行内拉黑加白、拦截卡片跳日志带 blockedOnly）、SecurityConfig（whoami 一键加白防自锁、白名单开启强确认、block_message 留空说明、GeoIP/trust 开关）、Security.tsx 跨 tab 联动、Blacklist/Whitelist 变薄封装。
+- request.ts 加 get_my_ip→GET /api/security/whoami；12 locale 补 key（zh/en 真翻译，其余英文兜底）。
+
+## 已知边界（审计后明确不做）
+
+- ProxyHops 模式不校验对端是否真为可信代理网段（固有语义，配置页文案已警告"仅前置可信代理时开启"；未来可加 trusted_proxy_cidrs）。
+- cleanup_old_ip_logs 末尾 VACUUM 持 security.db 锁；6h 一次且在 spawn_blocking，不阻塞 async runtime，保持现状。
+- 未做真实 HTTP E2E（无凭证不把 timeout 当成功）；路由挂载与中间件边界已静态核实（/api/* 只套 admin_auth 不套 ip_filter；AI 路由套 ip_filter；回环放行）。
+- ip-api 免费版 HTTP-only、15 req/min，单飞锁+TTL 缓存下不会打爆；失败静默降级。
+
+---
+
+# 历史接续状态 (2026-09-11 v4.7.6 发布与规则固化闭环)
 
 ## 核心进展与交付结论
 

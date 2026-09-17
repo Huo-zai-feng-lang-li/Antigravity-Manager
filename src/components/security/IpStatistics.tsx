@@ -1,210 +1,274 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Activity, ShieldAlert, Users, Globe, ShieldOff, ShieldCheck } from 'lucide-react';
 import { request as invoke } from '../../utils/request';
-import { Activity, ShieldAlert, Users, Globe } from 'lucide-react';
+import { showToast } from '../common/ToastContainer';
 import { formatCompactNumber } from '../../utils/format';
-
-interface IpRanking {
-    client_ip: string;
-    request_count: number;
-    last_seen: number;
-    is_blocked: boolean;
-}
-
-interface IpStatsResponse {
-    total_requests: number;
-    unique_ips: number;
-    blocked_requests: number;
-    top_ips: IpRanking[];
-}
-
-interface IpTokenStats {
-    client_ip: string;
-    total_tokens: number;
-    input_tokens: number;
-    output_tokens: number;
-    request_count: number;
-    username?: string;
-}
+import { describeIp } from '../../utils/ipFormat';
+import type { IpStatsResponse, IpTokenStats, IpRanking } from '../../types/security';
 
 interface Props {
     refreshKey?: number;
+    /** 点击拦截卡片跳转日志（带 blockedOnly） */
+    onJumpBlocked?: () => void;
 }
 
-export const IpStatistics: React.FC<Props> = ({ refreshKey }) => {
+const RANGES = [
+    { value: 1, key: 'security.stats.hour' },
+    { value: 24, key: 'security.stats.day' },
+    { value: 168, key: 'security.stats.week' },
+    { value: 720, key: 'security.stats.month' },
+    { value: 0, key: 'security.stats.all' },
+] as const;
+
+export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => {
     const { t } = useTranslation();
     const [stats, setStats] = useState<IpStatsResponse | null>(null);
     const [tokenStats, setTokenStats] = useState<IpTokenStats[]>([]);
     const [loading, setLoading] = useState(false);
     const [timeRange, setTimeRange] = useState<number>(24);
+    const [whitelisted, setWhitelisted] = useState<Set<string>>(new Set());
+    const enrichTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** 每个时间窗周期最多补刷一次归属地，离线/限流时不退化为轮询 */
+    const enrichScheduledRef = useRef(false);
 
-    const loadStats = async () => {
+    const loadStats = useCallback(async (isEnrichRetry = false) => {
         setLoading(true);
         try {
+            const hours = timeRange > 0 ? timeRange : undefined;
             const [statsData, tokenData] = await Promise.all([
-                invoke<IpStatsResponse>('get_ip_stats'),
-                invoke<IpTokenStats[]>('get_ip_token_stats', { limit: 20, hours: timeRange })
+                invoke<IpStatsResponse>('get_ip_stats', { hours }),
+                invoke<IpTokenStats[]>('get_ip_token_stats', { limit: 20, hours: timeRange }),
             ]);
             setStats(statsData);
             setTokenStats(tokenData || []);
+
+            const pendingGeo = [
+                ...(statsData?.top_ips || []).filter((r: IpRanking) => !r.geo),
+                ...(tokenData || []).filter((r: IpTokenStats) => !r.geo),
+            ].some(r => describeIp(r.client_ip, undefined, t).kind === 'public');
+            if (pendingGeo && !isEnrichRetry && !enrichScheduledRef.current) {
+                enrichScheduledRef.current = true;
+                if (enrichTimer.current) clearTimeout(enrichTimer.current);
+                enrichTimer.current = setTimeout(() => loadStats(true), 1800);
+            }
         } catch (e) {
             console.error('Failed to load stats', e);
         } finally {
             setLoading(false);
         }
-    };
-
-    useEffect(() => {
-        loadStats();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeRange, refreshKey]);
 
-    const getTimeRangeLabel = () => {
-        switch (timeRange) {
-            case 1: return t('security.stats.hour');
-            case 24: return t('security.stats.day');
-            case 168: return t('security.stats.week');
-            case 720: return t('security.stats.month');
-            default: return `${timeRange} h`;
+    useEffect(() => {
+        enrichScheduledRef.current = false;
+        loadStats();
+        return () => { if (enrichTimer.current) clearTimeout(enrichTimer.current); };
+    }, [loadStats]);
+
+    const addRule = async (ip: string, type: 'blacklist' | 'whitelist') => {
+        try {
+            if (type === 'blacklist') {
+                await invoke('add_ip_to_blacklist', {
+                    request: { ipPattern: ip, reason: t('security.rules.from_stats_reason'), expiresAt: null },
+                });
+                setStats(prev => prev ? {
+                    ...prev,
+                    top_ips: prev.top_ips.map(r => r.client_ip === ip ? { ...r, is_blocked: true } : r),
+                } : prev);
+                showToast(t('security.rules.add_success'), 'success');
+            } else {
+                await invoke('add_ip_to_whitelist', { request: { ipPattern: ip, description: null } });
+                setWhitelisted(prev => new Set(prev).add(ip));
+                showToast(t('security.rules.add_success'), 'success');
+            }
+        } catch (e) {
+            showToast(String(e), 'error');
         }
     };
 
-    if (loading && !stats) {
-        return <div className="p-10 text-center"><span className="loading loading-spinner"></span></div>;
-    }
+    const rangeLabel = () => {
+        const found = RANGES.find(r => r.value === timeRange);
+        return found ? t(found.key) : `${timeRange}h`;
+    };
 
+    if (loading && !stats) {
+        return <div className="p-10 text-center"><span className="loading loading-spinner" /></div>;
+    }
     if (!stats) {
         return <div className="p-10 text-center text-gray-500">{t('security.stats.no_data')}</div>;
     }
 
     const maxReqCount = Math.max(...tokenStats.map(ip => ip.request_count), 1);
 
+    const RuleButtons: React.FC<{ ip: string; blocked?: boolean }> = ({ ip, blocked }) => {
+        const isWhite = whitelisted.has(ip);
+        return (
+            <div className="flex gap-1 justify-end" onClick={e => e.stopPropagation()}>
+                {!blocked ? (
+                    <button
+                        className="btn btn-xs btn-ghost text-red-500 gap-1"
+                        title={t('security.rules.add_black')}
+                        onClick={() => addRule(ip, 'blacklist')}
+                    >
+                        <ShieldOff size={13} />
+                    </button>
+                ) : (
+                    <span className="badge badge-xs badge-error gap-1 text-white"><ShieldOff size={10} />{t('security.rules.blocked_tag')}</span>
+                )}
+                {!isWhite ? (
+                    <button
+                        className="btn btn-xs btn-ghost text-green-600 gap-1"
+                        title={t('security.rules.add_white')}
+                        onClick={() => addRule(ip, 'whitelist')}
+                    >
+                        <ShieldCheck size={13} />
+                    </button>
+                ) : (
+                    <span className="badge badge-xs badge-success gap-1 text-white"><ShieldCheck size={10} />{t('security.rules.whitelisted_tag')}</span>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div className="h-full flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-scroll p-6 space-y-6">
-
-                {/* Overview Cards */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300">
-                        <div className="stat-figure text-blue-500">
-                            <Activity size={32} />
-                        </div>
+                        <div className="stat-figure text-blue-500"><Activity size={32} /></div>
                         <div className="stat-title">{t('security.stats.total_requests')}</div>
                         <div className="stat-value text-blue-500">{formatCompactNumber(stats.total_requests)}</div>
-                        <div className="stat-desc">{t('security.stats.total_requests_desc')}</div>
+                        <div className="stat-desc">{rangeLabel()}</div>
                     </div>
-
                     <div className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300">
-                        <div className="stat-figure text-purple-500">
-                            <Users size={32} />
-                        </div>
+                        <div className="stat-figure text-purple-500"><Users size={32} /></div>
                         <div className="stat-title">{t('security.stats.unique_ips')}</div>
                         <div className="stat-value text-purple-500">{formatCompactNumber(stats.unique_ips)}</div>
-                        <div className="stat-desc">{t('security.stats.unique_ips_desc')}</div>
+                        <div className="stat-desc">{rangeLabel()}</div>
                     </div>
-
-                    <div className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300">
-                        <div className="stat-figure text-red-500">
-                            <ShieldAlert size={32} />
-                        </div>
+                    <button
+                        type="button"
+                        onClick={onJumpBlocked}
+                        className="stat bg-white dark:bg-base-200 shadow rounded-xl border border-gray-100 dark:border-base-300 text-left hover:border-red-300 transition-colors cursor-pointer"
+                        title={t('security.stats.jump_blocked_tip')}
+                    >
+                        <div className="stat-figure text-red-500"><ShieldAlert size={32} /></div>
                         <div className="stat-title">{t('security.stats.blocked_requests')}</div>
                         <div className="stat-value text-red-500">{formatCompactNumber(stats.blocked_requests)}</div>
-                        <div className="stat-desc">{t('security.stats.blocked_requests_desc')}</div>
+                        <div className="stat-desc">{t('security.stats.jump_blocked')}</div>
+                    </button>
+                </div>
+
+                {/* Top IPs（访问排行，含一键拉黑/加白） */}
+                <div className="bg-white dark:bg-base-200 rounded-xl shadow-sm border border-gray-100 dark:border-base-300 overflow-hidden">
+                    <div className="p-4 border-b border-gray-100 dark:border-base-300 flex items-center gap-2">
+                        <Globe size={20} className="text-blue-500" />
+                        <h3 className="font-bold text-lg">{t('security.stats.top_ips')} ({rangeLabel()})</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="table w-full">
+                            <thead>
+                                <tr>
+                                    <th className="w-12">{t('security.stats.rank')}</th>
+                                    <th>{t('security.stats.ip_address')}</th>
+                                    <th>{t('security.stats.location')}</th>
+                                    <th className="w-32 text-right">{t('security.stats.request_count')}</th>
+                                    <th className="w-40 text-right">{t('security.stats.actions')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {stats.top_ips.map((ip, index) => {
+                                    const desc = describeIp(ip.client_ip, ip.geo, t);
+                                    return (
+                                        <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
+                                            <td className="font-bold text-gray-400">#{index + 1}</td>
+                                            <td className="font-mono font-medium">{desc.ip}</td>
+                                            <td className="text-xs text-gray-500">{desc.detail || '-'}</td>
+                                            <td className="text-right font-mono">{formatCompactNumber(ip.request_count)}</td>
+                                            <td><RuleButtons ip={ip.client_ip} blocked={ip.is_blocked} /></td>
+                                        </tr>
+                                    );
+                                })}
+                                {stats.top_ips.length === 0 && (
+                                    <tr><td colSpan={5} className="text-center py-8 text-gray-500">{t('security.stats.no_data')}</td></tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
-                <div className="w-full">
-                    {/* Combined IP Stats */}
-                    <div className="bg-white dark:bg-base-200 rounded-xl shadow-sm border border-gray-100 dark:border-base-300 overflow-hidden">
-                        <div className="p-4 border-b border-gray-100 dark:border-base-300 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                                <Globe size={20} className="text-blue-500" />
-                                <h3 className="font-bold text-lg">{t('security.stats.ip_activity_token_usage')} ({getTimeRangeLabel()})</h3>
-                            </div>
-                            <div className="flex gap-1">
+                {/* Token 消耗活跃度 */}
+                <div className="bg-white dark:bg-base-200 rounded-xl shadow-sm border border-gray-100 dark:border-base-300 overflow-hidden">
+                    <div className="p-4 border-b border-gray-100 dark:border-base-300 flex items-center justify-between gap-2 flex-wrap">
+                        <h3 className="font-bold text-lg">{t('security.stats.ip_activity_token_usage')}</h3>
+                        <div className="flex gap-1">
+                            {RANGES.map(r => (
                                 <button
-                                    className={`btn btn-xs min-w-[48px] ${timeRange === 1 ? 'btn-active btn-primary' : ''}`}
-                                    onClick={() => setTimeRange(1)}
-                                >{t('security.stats.hour')}</button>
-                                <button
-                                    className={`btn btn-xs min-w-[48px] ${timeRange === 24 ? 'btn-active btn-primary' : ''}`}
-                                    onClick={() => setTimeRange(24)}
-                                >{t('security.stats.day')}</button>
-                                <button
-                                    className={`btn btn-xs min-w-[48px] ${timeRange === 168 ? 'btn-active btn-primary' : ''}`}
-                                    onClick={() => setTimeRange(168)}
-                                >{t('security.stats.week')}</button>
-                                <button
-                                    className={`btn btn-xs min-w-[48px] ${timeRange === 720 ? 'btn-active btn-primary' : ''}`}
-                                    onClick={() => setTimeRange(720)}
-                                >{t('security.stats.month')}</button>
-                            </div>
+                                    key={r.value}
+                                    className={`btn btn-xs min-w-[48px] ${timeRange === r.value ? 'btn-active btn-primary' : ''}`}
+                                    onClick={() => setTimeRange(r.value)}
+                                >
+                                    {t(r.key)}
+                                </button>
+                            ))}
                         </div>
-                        <div className="overflow-x-auto">
-                            <table className="table w-full">
-                                <thead>
-                                    <tr>
-                                        <th className="w-12">{t('security.stats.rank')}</th>
-                                        <th>{t('security.stats.ip_address')}</th>
-                                        <th className="w-24">{t('security.logs.username')}</th>
-                                        <th className="w-1/4">{t('security.stats.activity_reqs')}</th>
-                                        <th className="text-right">{t('security.stats.total_token')}</th>
-                                        <th className="text-right text-xs text-gray-500">{t('security.stats.prompt')}</th>
-                                        <th className="text-right text-xs text-gray-500">{t('security.stats.completion')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {tokenStats.map((ip, index) => {
-                                        // Determine color based on usage magnitude
-                                        let colorClass = "text-green-500";
-                                        if (ip.total_tokens > 1000000) colorClass = "text-red-500 font-bold";
-                                        else if (ip.total_tokens > 100000) colorClass = "text-yellow-500 font-bold";
-                                        else if (ip.total_tokens > 10000) colorClass = "text-blue-500";
-
-                                        const percentage = Math.min(100, Math.max(0, (ip.request_count / maxReqCount) * 100)) || 0;
-
-                                        return (
-                                            <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
-                                                <td className="font-bold text-gray-400">#{index + 1}</td>
-                                                <td className="font-mono font-medium">
-                                                    {ip.client_ip}
-                                                </td>
-                                                <td className="font-medium text-blue-600 dark:text-blue-400">{ip.username || '-'}</td>
-                                                <td>
-                                                    <div className="flex flex-col gap-1">
-                                                        <div className="flex justify-between text-xs text-gray-500">
-                                                            <span>{formatCompactNumber(ip.request_count)} reqs</span>
-                                                            <span>{Math.round(percentage)}%</span>
-                                                        </div>
-                                                        <div className="w-full bg-gray-100 dark:bg-base-300 rounded-full h-1.5">
-                                                            <div
-                                                                className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
-                                                                style={{ width: `${percentage}%` }}
-                                                            ></div>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td className={`text-right font-mono text-lg ${colorClass}`}>
-                                                    {formatCompactNumber(ip.total_tokens)}
-                                                </td>
-                                                <td className="text-right font-mono text-gray-500 text-xs">
-                                                    {formatCompactNumber(ip.input_tokens)}
-                                                </td>
-                                                <td className="text-right font-mono text-gray-500 text-xs">
-                                                    {formatCompactNumber(ip.output_tokens)}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {tokenStats.length === 0 && (
-                                        <tr>
-                                            <td colSpan={7} className="text-center py-8 text-gray-500">
-                                                {t('security.stats.no_data')}
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="table w-full">
+                            <thead>
+                                <tr>
+                                    <th className="w-12">{t('security.stats.rank')}</th>
+                                    <th>{t('security.stats.ip_address')}</th>
+                                    <th className="w-24">{t('security.logs.username')}</th>
+                                    <th className="w-1/4">{t('security.stats.activity_reqs')}</th>
+                                    <th className="text-right">{t('security.stats.total_token')}</th>
+                                    <th className="text-right text-xs text-gray-500">{t('security.stats.prompt')}</th>
+                                    <th className="text-right text-xs text-gray-500">{t('security.stats.completion')}</th>
+                                    <th className="w-40 text-right">{t('security.stats.actions')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {tokenStats.map((ip, index) => {
+                                    let colorClass = 'text-green-500';
+                                    if (ip.total_tokens > 1000000) colorClass = 'text-red-500 font-bold';
+                                    else if (ip.total_tokens > 100000) colorClass = 'text-yellow-500 font-bold';
+                                    else if (ip.total_tokens > 10000) colorClass = 'text-blue-500';
+                                    const percentage = Math.min(100, Math.max(0, (ip.request_count / maxReqCount) * 100)) || 0;
+                                    const blocked = stats.top_ips.find(r => r.client_ip === ip.client_ip)?.is_blocked;
+                                    return (
+                                        <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
+                                            <td className="font-bold text-gray-400">#{index + 1}</td>
+                                            <td className="font-mono font-medium">
+                                                {describeIp(ip.client_ip, ip.geo, t).ip}
+                                                {describeIp(ip.client_ip, ip.geo, t).detail && (
+                                                    <div className="text-[11px] text-gray-400 font-normal">{describeIp(ip.client_ip, ip.geo, t).detail}</div>
+                                                )}
                                             </td>
+                                            <td className="font-medium text-blue-600 dark:text-blue-400">{ip.username || '-'}</td>
+                                            <td>
+                                                <div className="flex flex-col gap-1">
+                                                    <div className="flex justify-between text-xs text-gray-500">
+                                                        <span>{formatCompactNumber(ip.request_count)} reqs</span>
+                                                        <span>{Math.round(percentage)}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-gray-100 dark:bg-base-300 rounded-full h-1.5">
+                                                        <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${percentage}%` }} />
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className={`text-right font-mono text-lg ${colorClass}`}>{formatCompactNumber(ip.total_tokens)}</td>
+                                            <td className="text-right font-mono text-gray-500 text-xs">{formatCompactNumber(ip.input_tokens)}</td>
+                                            <td className="text-right font-mono text-gray-500 text-xs">{formatCompactNumber(ip.output_tokens)}</td>
+                                            <td><RuleButtons ip={ip.client_ip} blocked={blocked} /></td>
                                         </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
+                                    );
+                                })}
+                                {tokenStats.length === 0 && (
+                                    <tr><td colSpan={8} className="text-center py-8 text-gray-500">{t('security.stats.no_data')}</td></tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>

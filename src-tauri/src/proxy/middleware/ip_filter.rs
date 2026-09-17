@@ -1,193 +1,149 @@
-use crate::modules::security_db;
-use crate::proxy::server::AppState;
-use axum::{
-    extract::{Request, State},
-    http::StatusCode,
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
+//! IP 黑白名单过滤中间件
+//!
+//! 判定全部基于内存快照（[`IpRuleSet`]），热路径零磁盘 IO；
+//! 客户端 IP 提取遵循 [`TrustMode`]，直连模式下忽略可伪造的代理头。
 
-/// IP 黑白名单过滤中间件
+use crate::modules::ip_util;
+use crate::modules::security_db::{self, IpAccessLog, IpBlacklistEntry};
+use crate::proxy::security::ip_rules::IpRuleSet;
+use axum::body::Body;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{Request, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::json;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::error;
+
+use crate::proxy::server::AppState;
+
+/// 组装最终封禁消息：自定义文案优先，空值回退默认。
+fn blacklist_message(configured: &str, entry: &IpBlacklistEntry) -> String {
+    let base = configured.trim();
+    let base = if base.is_empty() {
+        "Access denied. Reason: IP blocked."
+    } else {
+        base
+    };
+    match entry.expires_at {
+        Some(_) => format!("{base} (temporary ban)"),
+        None => format!("{base} (permanent ban)"),
+    }
+}
+
+/// IP 过滤中间件
 pub async fn ip_filter_middleware(
     State(state): State<AppState>,
-    request: Request,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    request: Request<Body>,
     next: Next,
 ) -> Response {
-    // 提取客户端 IP
-    let client_ip = extract_client_ip(&request);
+    let security_config = state.security.read().await.clone();
+    let monitor = security_config.security_monitor.clone();
 
-    if let Some(ip) = &client_ip {
-        // 读取安全配置
-        let security_config = state.security.read().await;
+    let ip = ip_util::pick_client_ip(
+        request.headers(),
+        Some(peer_addr.ip()),
+        security_config.trust_mode(),
+    )
+    .unwrap_or_else(|| peer_addr.ip().to_string());
 
-        // 1. 检查白名单 (如果启用白名单模式,只允许白名单 IP)
-        if security_config.security_monitor.whitelist.enabled {
-            match security_db::is_ip_in_whitelist(ip) {
-                Ok(true) => {
-                    // 在白名单中,直接放行
-                    tracing::debug!("[IP Filter] IP {} is in whitelist, allowing", ip);
-                    return next.run(request).await;
-                }
-                Ok(false) => {
-                    // 不在白名单中,且启用了白名单模式,拒绝访问
-                    tracing::warn!("[IP Filter] IP {} not in whitelist, blocking", ip);
-                    return create_blocked_response(
-                        ip,
-                        "Access denied. Your IP is not in the whitelist.",
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("[IP Filter] Failed to check whitelist: {}", e);
-                }
-            }
-        } else {
-            // 白名单优先模式: 如果在白名单中,跳过黑名单检查
-            if security_config
-                .security_monitor
-                .whitelist
-                .whitelist_priority
-            {
-                match security_db::is_ip_in_whitelist(ip) {
-                    Ok(true) => {
-                        tracing::debug!("[IP Filter] IP {} is in whitelist (priority mode), skipping blacklist check", ip);
-                        return next.run(request).await;
-                    }
-                    Ok(false) => {
-                        // 继续检查黑名单
-                    }
-                    Err(e) => {
-                        tracing::error!("[IP Filter] Failed to check whitelist: {}", e);
-                    }
-                }
-            }
-        }
-
-        // 2. 检查黑名单
-        if security_config.security_monitor.blacklist.enabled {
-            match security_db::get_blacklist_entry_for_ip(ip) {
-                Ok(Some(entry)) => {
-                    tracing::warn!("[IP Filter] IP {} is in blacklist, blocking", ip);
-
-                    // 构建详细的封禁消息
-                    let reason = entry
-                        .reason
-                        .as_deref()
-                        .unwrap_or("Malicious activity detected");
-                    let ban_type = if let Some(expires_at) = entry.expires_at {
-                        let now = chrono::Utc::now().timestamp();
-                        let remaining_seconds = expires_at - now;
-
-                        if remaining_seconds > 0 {
-                            let hours = remaining_seconds / 3600;
-                            let minutes = (remaining_seconds % 3600) / 60;
-
-                            if hours > 24 {
-                                let days = hours / 24;
-                                format!("Temporary ban. Please try again after {} day(s).", days)
-                            } else if hours > 0 {
-                                format!("Temporary ban. Please try again after {} hour(s) and {} minute(s).", hours, minutes)
-                            } else {
-                                format!(
-                                    "Temporary ban. Please try again after {} minute(s).",
-                                    minutes
-                                )
-                            }
-                        } else {
-                            "Temporary ban (expired, will be removed soon).".to_string()
-                        }
-                    } else {
-                        "Permanent ban.".to_string()
-                    };
-
-                    let detailed_message =
-                        format!("Access denied. Reason: {}. {}", reason, ban_type);
-
-                    // 记录被封禁的访问日志
-                    let log = security_db::IpAccessLog {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        client_ip: ip.clone(),
-                        timestamp: chrono::Utc::now().timestamp(),
-                        method: Some(request.method().to_string()),
-                        path: Some(request.uri().to_string()),
-                        user_agent: request
-                            .headers()
-                            .get("user-agent")
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.to_string()),
-                        status: Some(403),
-                        duration: Some(0),
-                        api_key_hash: None,
-                        blocked: true,
-                        block_reason: Some(format!("IP in blacklist: {}", reason)),
-                        username: None,
-                    };
-
-                    tokio::spawn(async move {
-                        if let Err(e) = security_db::save_ip_access_log(&log) {
-                            tracing::error!("[IP Filter] Failed to save blocked access log: {}", e);
-                        }
-                    });
-
-                    return create_blocked_response(ip, &detailed_message);
-                }
-                Ok(None) => {
-                    // 不在黑名单中,放行
-                    tracing::debug!("[IP Filter] IP {} not in blacklist, allowing", ip);
-                }
-                Err(e) => {
-                    tracing::error!("[IP Filter] Failed to check blacklist: {}", e);
-                }
-            }
-        }
-    } else {
-        tracing::warn!("[IP Filter] Unable to extract client IP from request");
+    // 本机回环始终放行：避免开启白名单后把本机客户端/管理链路锁死。
+    if ip_util::is_loopback_ip(&ip) {
+        return next.run(request).await;
     }
 
-    // 放行请求
+    let rules: Arc<IpRuleSet> = state.ip_rules.read().clone();
+
+    // 白名单模式：仅白名单 IP 可访问
+    if monitor.whitelist.enabled {
+        if rules.is_whitelisted(&ip) {
+            return next.run(request).await;
+        }
+        return deny(
+            request,
+            &ip,
+            "Access denied: IP not in whitelist.",
+            "IP not whitelisted",
+            None,
+        )
+        .await;
+    }
+
+    // 白名单优先：白名单内 IP 跳过黑名单检查
+    let whitelisted = monitor.whitelist.whitelist_priority && rules.is_whitelisted(&ip);
+
+    if !whitelisted && monitor.blacklist.enabled {
+        if let Some(entry) = rules.match_blacklist(&ip) {
+            let message = blacklist_message(&monitor.blacklist.block_message, &entry);
+            return deny(
+                request,
+                &ip,
+                &message,
+                &entry
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "Blacklisted".to_string()),
+                Some(entry),
+            )
+            .await;
+        }
+    }
+
     next.run(request).await
 }
 
-/// 从请求中提取客户端 IP
-fn extract_client_ip(request: &Request) -> Option<String> {
-    // 1. 优先从 X-Forwarded-For 提取 (取第一个 IP)
-    request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .or_else(|| {
-            // 2. 备选从 X-Real-IP 提取
-            request
-                .headers()
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .or_else(|| {
-            // 3. 最后尝试从 ConnectInfo 获取 (TCP 连接 IP)
-            // 这可以解决本地开发/测试时没有代理头导致 IP 获取失败的问题
-            request
-                .extensions()
-                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                .map(|info| info.0.ip().to_string())
-        })
-}
+/// 记录拦截日志并返回 403。命中计数与日志写入合并到一次阻塞任务中。
+async fn deny(
+    request: Request<Body>,
+    ip: &str,
+    message: &str,
+    reason: &str,
+    black_entry: Option<Arc<IpBlacklistEntry>>,
+) -> Response {
+    let method = request.method().clone();
+    let uri = request.uri().clone();
 
-/// 创建被封禁的响应
-fn create_blocked_response(ip: &str, message: &str) -> Response {
-    let body = serde_json::json!({
-        "error": {
-            "message": message,
-            "type": "ip_blocked",
-            "code": "ip_blocked",
-            "ip": ip,
+    let log = IpAccessLog {
+        id: uuid::Uuid::new_v4().to_string(),
+        client_ip: ip.to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+        method: Some(method.to_string()),
+        path: Some(uri.path().to_string()),
+        user_agent: None,
+        status: Some(403),
+        duration: None,
+        api_key_hash: None,
+        blocked: true,
+        block_reason: Some(reason.to_string()),
+        username: None,
+        geo: None,
+    };
+
+    let entry_id = black_entry.as_ref().map(|entry| entry.id.clone());
+    let blocking = tokio::task::spawn_blocking(move || {
+        if let Some(id) = entry_id {
+            if let Err(error) = security_db::increment_blacklist_hit(&id) {
+                error!("Failed to increment blacklist hit count: {error}");
+            }
+        }
+        if let Err(error) = security_db::save_ip_access_log(&log) {
+            error!("Failed to save IP access log: {error}");
         }
     });
+    let _ = blocking.await;
 
     (
         StatusCode::FORBIDDEN,
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        serde_json::to_string(&body).unwrap_or_else(|_| message.to_string()),
+        Json(json!({
+            "error": {
+                "message": message,
+                "type": "ip_filter",
+                "code": "ip_forbidden"
+            }
+        })),
     )
         .into_response()
 }

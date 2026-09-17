@@ -251,6 +251,7 @@ pub async fn handle_warmup(
                 cached_tokens: None,
                 protocol: Some("warmup".to_string()),
                 username: None,
+                user_agent: None,
             };
             state.monitor.log_request(log).await;
 
@@ -349,6 +350,7 @@ pub async fn handle_warmup(
                 cached_tokens: None,
                 protocol: Some("warmup".to_string()),
                 username: None,
+                user_agent: None,
             };
             state.monitor.log_request(log).await;
 

@@ -5,10 +5,12 @@ pub mod cloudflared;
 pub mod config;
 pub mod db;
 pub mod device;
+pub mod geoip;
 #[allow(dead_code)]
 pub mod http_api;
 pub mod i18n;
 pub mod integration;
+pub mod ip_util;
 pub mod log_bridge;
 pub mod logger;
 pub mod migration;

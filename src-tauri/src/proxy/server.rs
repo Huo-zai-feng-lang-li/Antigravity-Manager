@@ -2,7 +2,7 @@ use crate::models::AppConfig;
 use crate::modules::{account, config, logger, migration, proxy_db, security_db, token_stats};
 use crate::proxy::TokenManager;
 use axum::{
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json, Response},
     routing::{any, delete, get, post},
@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{oneshot, watch, RwLock};
@@ -111,6 +112,8 @@ pub struct AppState {
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [FIX Web Mode]
     pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>, // [NEW] 是否只暴露真实配额模型
     pub image_scheduler: Arc<ImageScheduler>,
+    /// IP 黑白名单内存快照（热路径零磁盘 IO），写库后由命令层触发 reload。
+    pub ip_rules: Arc<parking_lot::RwLock<Arc<crate::proxy::security::ip_rules::IpRuleSet>>>,
 }
 
 #[derive(Default)]
@@ -422,9 +425,26 @@ pub struct AxumServer {
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [NEW] 代理池配置状态
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [NEW] 暴露代理池管理器供命令调用
     pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>,
+    ip_rules: Arc<parking_lot::RwLock<Arc<crate::proxy::security::ip_rules::IpRuleSet>>>,
 }
 
 impl AxumServer {
+    /// 从安全库重新装载 IP 名单快照（名单增删改后调用，热路径即时生效）。
+    pub fn reload_ip_rules(&self) -> Result<(), String> {
+        let rules = crate::proxy::security::ip_rules::IpRuleSet::load()?;
+        *self.ip_rules.write() = Arc::new(rules);
+        tracing::info!("IP 黑白名单快照已热更新");
+        Ok(())
+    }
+
+    /// 基于当前快照判断 IP 是否命中黑名单（管理接口用）。
+    pub fn match_blacklist(
+        &self,
+        ip: &str,
+    ) -> Option<Arc<crate::modules::security_db::IpBlacklistEntry>> {
+        self.ip_rules.read().match_blacklist(ip)
+    }
+
     pub async fn update_only_raw_quota_models(&self, only_raw: bool) {
         let mut r = self.only_raw_quota_models.write().await;
         *r = only_raw;
@@ -467,9 +487,7 @@ impl AxumServer {
 
     pub async fn update_security(&self, config: &crate::proxy::config::ProxyConfig) {
         let mut sec = self.security_state.write().await;
-        let public_tunnel_active = sec.public_tunnel_active;
-        *sec = crate::proxy::ProxySecurityConfig::from_proxy_config(config);
-        sec.public_tunnel_active = public_tunnel_active;
+        sec.rebuild_preserving_tunnel(config);
         tracing::info!("反代服务安全配置已热更新");
     }
 
@@ -548,6 +566,14 @@ impl AxumServer {
         let is_running_state = Arc::new(RwLock::new(false));
 
         let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(only_raw_quota_models));
+
+        // 装载 IP 名单内存快照；安全库未就绪时用空集（白名单模式下空集即拒绝，属安全默认）
+        let ip_rules = Arc::new(parking_lot::RwLock::new(Arc::new(
+            crate::proxy::security::ip_rules::IpRuleSet::load().unwrap_or_else(|error| {
+                tracing::error!("加载 IP 名单快照失败，使用空规则集: {error}");
+                crate::proxy::security::ip_rules::IpRuleSet::default()
+            }),
+        )));
         let image_account_ids = token_manager.enabled_account_ids();
         let image_account_count = image_account_ids.len();
         let image_scheduler = build_image_scheduler(
@@ -600,6 +626,7 @@ impl AxumServer {
             proxy_pool_manager: proxy_pool_manager.clone(),
             only_raw_quota_models: only_raw_quota_models_state.clone(),
             image_scheduler,
+            ip_rules: ip_rules.clone(),
         };
 
         // 构建路由 - 使用新架构的 handlers！
@@ -913,6 +940,7 @@ impl AxumServer {
             .route("/security/logs/clear", post(admin_clear_ip_access_logs))
             .route("/security/stats", get(admin_get_ip_stats))
             .route("/security/token-stats", get(admin_get_ip_token_stats)) // For IP Token usage
+            .route("/security/whoami", get(admin_security_whoami))
             .route(
                 "/security/blacklist",
                 get(admin_get_ip_blacklist)
@@ -1017,6 +1045,7 @@ impl AxumServer {
             proxy_pool_state,
             proxy_pool_manager,
             only_raw_quota_models: only_raw_quota_models_state,
+            ip_rules,
         };
 
         // 在新任务中启动服务器
@@ -3534,7 +3563,30 @@ struct IpAccessLogResponse {
     total: usize,
 }
 
+/// 名单写库后重新装载 HTTP 服务的内存快照。
+fn reload_ip_rules_http(state: &AppState) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let rules = crate::proxy::security::ip_rules::IpRuleSet::load().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
+    *state.ip_rules.write() = Arc::new(rules);
+    Ok(())
+}
+
+/// 校验失败统一返回 400。
+fn bad_request(message: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: message.to_string(),
+        }),
+    )
+}
+
 async fn admin_get_ip_access_logs(
+    State(state): State<AppState>,
     Query(q): Query<IpAccessLogQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let offset = (q.page.max(1) - 1) * q.page_size;
@@ -3555,6 +3607,12 @@ async fn admin_get_ip_access_logs(
                 Json(ErrorResponse { error: e }),
             )
         })? as usize;
+
+    let enabled = state.security.read().await.security_monitor.geoip_enabled;
+    crate::modules::geoip::spawn_enrich(
+        logs.iter().map(|log| log.client_ip.clone()).collect(),
+        enabled,
+    );
 
     Ok(Json(IpAccessLogResponse { logs, total }))
 }
@@ -3578,19 +3636,42 @@ struct IpStatsResponse {
     top_ips: Vec<crate::modules::security_db::IpRanking>,
 }
 
-async fn admin_get_ip_stats() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let stats = security_db::get_ip_stats().map_err(|e| {
+#[derive(Deserialize)]
+struct IpStatsQuery {
+    /// 时间窗（小时）；缺省或 <=0 表示全部。
+    hours: Option<i64>,
+}
+
+async fn admin_get_ip_stats(
+    State(state): State<AppState>,
+    Query(q): Query<IpStatsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let hours = q.hours;
+    let stats = security_db::get_ip_stats(hours).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         )
     })?;
-    let top_ips = security_db::get_top_ips(10, 24).map_err(|e| {
+    let mut top_ips = security_db::get_top_ips(10, hours.unwrap_or(0)).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         )
     })?;
+
+    {
+        let rules = state.ip_rules.read().clone();
+        for ranking in &mut top_ips {
+            ranking.is_blocked = rules.match_blacklist(&ranking.client_ip).is_some();
+        }
+    }
+
+    let enabled = state.security.read().await.security_monitor.geoip_enabled;
+    crate::modules::geoip::spawn_enrich(
+        top_ips.iter().map(|r| r.client_ip.clone()).collect(),
+        enabled,
+    );
 
     let response = IpStatsResponse {
         total_requests: stats.total_requests as usize,
@@ -3608,15 +3689,26 @@ struct IpTokenStatsQuery {
 }
 
 async fn admin_get_ip_token_stats(
+    State(state): State<AppState>,
     Query(q): Query<IpTokenStatsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let stats = proxy_db::get_token_usage_by_ip(q.limit.unwrap_or(100), q.hours.unwrap_or(720))
+    let mut stats = proxy_db::get_token_usage_by_ip(q.limit.unwrap_or(100), q.hours.unwrap_or(720))
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse { error: e }),
             )
         })?;
+
+    let ips: Vec<String> = stats.iter().map(|s| s.client_ip.clone()).collect();
+    if let Ok(geo_map) = security_db::get_geo_map(&ips) {
+        for item in &mut stats {
+            item.geo = geo_map.get(&item.client_ip).cloned();
+        }
+    }
+    let enabled = state.security.read().await.security_monitor.geoip_enabled;
+    crate::modules::geoip::spawn_enrich(ips, enabled);
+
     Ok(Json(stats))
 }
 
@@ -3639,8 +3731,14 @@ struct AddBlacklistRequest {
 }
 
 async fn admin_add_ip_to_blacklist(
+    State(state): State<AppState>,
     Json(req): Json<AddBlacklistRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    if !crate::modules::ip_util::is_valid_ip_pattern(&req.ip_pattern) {
+        return Err(bad_request(
+            "Invalid IP pattern. Use an IPv4/IPv6 address or CIDR.",
+        ));
+    }
     security_db::add_to_blacklist(
         &req.ip_pattern,
         req.reason.as_deref(),
@@ -3653,6 +3751,7 @@ async fn admin_add_ip_to_blacklist(
             Json(ErrorResponse { error: e }),
         )
     })?;
+    reload_ip_rules_http(&state)?;
 
     Ok(StatusCode::CREATED)
 }
@@ -3664,6 +3763,7 @@ struct RemoveIpRequest {
 }
 
 async fn admin_remove_ip_from_blacklist(
+    State(state): State<AppState>,
     Query(q): Query<RemoveIpRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let entries = security_db::get_blacklist().map_err(|e| {
@@ -3674,7 +3774,8 @@ async fn admin_remove_ip_from_blacklist(
     })?;
 
     if let Some(entry) = entries.iter().find(|e| e.ip_pattern == q.ip_pattern) {
-        security_db::remove_from_blacklist(&entry.id).map_err(|e| {
+        let id = entry.id.clone();
+        security_db::remove_from_blacklist(&id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse { error: e }),
@@ -3688,26 +3789,21 @@ async fn admin_remove_ip_from_blacklist(
             }),
         ));
     }
+    reload_ip_rules_http(&state)?;
 
     Ok(StatusCode::OK)
 }
 
-async fn admin_clear_ip_blacklist() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)>
-{
-    let entries = security_db::get_blacklist().map_err(|e| {
+async fn admin_clear_ip_blacklist(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    security_db::clear_blacklist().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         )
     })?;
-    for entry in entries {
-        security_db::remove_from_blacklist(&entry.id).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })?;
-    }
+    reload_ip_rules_http(&state)?;
     Ok(StatusCode::OK)
 }
 
@@ -3747,18 +3843,26 @@ struct AddWhitelistRequest {
 }
 
 async fn admin_add_ip_to_whitelist(
+    State(state): State<AppState>,
     Json(req): Json<AddWhitelistRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    if !crate::modules::ip_util::is_valid_ip_pattern(&req.ip_pattern) {
+        return Err(bad_request(
+            "Invalid IP pattern. Use an IPv4/IPv6 address or CIDR.",
+        ));
+    }
     security_db::add_to_whitelist(&req.ip_pattern, req.description.as_deref()).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         )
     })?;
+    reload_ip_rules_http(&state)?;
     Ok(StatusCode::CREATED)
 }
 
 async fn admin_remove_ip_from_whitelist(
+    State(state): State<AppState>,
     Query(q): Query<RemoveIpRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let entries = security_db::get_whitelist().map_err(|e| {
@@ -3769,7 +3873,8 @@ async fn admin_remove_ip_from_whitelist(
     })?;
 
     if let Some(entry) = entries.iter().find(|e| e.ip_pattern == q.ip_pattern) {
-        security_db::remove_from_whitelist(&entry.id).map_err(|e| {
+        let id = entry.id.clone();
+        security_db::remove_from_whitelist(&id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse { error: e }),
@@ -3783,26 +3888,33 @@ async fn admin_remove_ip_from_whitelist(
             }),
         ));
     }
+    reload_ip_rules_http(&state)?;
     Ok(StatusCode::OK)
 }
 
-async fn admin_clear_ip_whitelist() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)>
-{
-    let entries = security_db::get_whitelist().map_err(|e| {
+async fn admin_clear_ip_whitelist(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    security_db::clear_whitelist().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         )
     })?;
-    for entry in entries {
-        security_db::remove_from_whitelist(&entry.ip_pattern).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })?;
-    }
+    reload_ip_rules_http(&state)?;
     Ok(StatusCode::OK)
+}
+
+/// Web 模式返回调用方在服务端视角的真实 IP（whoami），供白名单防自锁。
+async fn admin_security_whoami(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let mode = state.security.read().await.trust_mode();
+    let ip = crate::modules::ip_util::pick_client_ip(&headers, Some(peer_addr.ip()), mode)
+        .unwrap_or_else(|| peer_addr.ip().to_string());
+    Json(crate::commands::security::build_whoami(&ip))
 }
 
 async fn admin_check_ip_in_whitelist(
@@ -3818,8 +3930,12 @@ async fn admin_check_ip_in_whitelist(
 }
 
 async fn admin_get_security_config(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    // 优先返回运行时内存配置（含热更新），服务未运行时回退磁盘。
+    if *state.is_running.read().await {
+        return Ok(Json(state.security.read().await.security_monitor.clone()));
+    }
     let app_config = crate::modules::config::load_app_config().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3864,9 +3980,12 @@ async fn admin_update_security_config(
 
     {
         let mut sec = state.security.write().await;
-        *sec = crate::proxy::ProxySecurityConfig::from_proxy_config(&app_config.proxy);
+        // public_tunnel_active 是运行态（cloudflared 启停翻转），重建时必须保留，
+        // 否则 Web 保存一次配置就会把 Cloudflare 信任模式静默打回 Direct。
+        sec.rebuild_preserving_tunnel(&app_config.proxy);
         tracing::info!("[Security] Runtime security config hot-reloaded via Web API");
     }
+    // trust_proxy_headers 等开关变更不影响名单本身，无需 reload 快照。
 
     Ok(StatusCode::OK)
 }

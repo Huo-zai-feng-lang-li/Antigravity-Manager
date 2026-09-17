@@ -10,7 +10,11 @@ import {
     ChevronUp,
     AlertTriangle,
     Sliders,
-    MessageSquare
+    MessageSquare,
+    Image as ImageIcon,
+    Eye,
+    ShieldCheck,
+    X
 } from 'lucide-react';
 import { ParsedConversation } from './logPayloadParser';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -32,6 +36,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     const [isThinkingOpen, setIsThinkingOpen] = useState(false);
     const [isSystemOpen, setIsSystemOpen] = useState(false);
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+    const [previewModalImg, setPreviewModalImg] = useState<{ src: string; label: string } | null>(null);
 
     const handleCopy = async (text: string, key: string) => {
         const success = await copyToClipboard(text);
@@ -68,7 +73,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     }
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-4 relative">
             {/* 1. 系统设定（System Prompt） - 折叠展示 */}
             {parsed.systemPrompt && (
                 <div className="bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-200 dark:border-base-300 overflow-hidden text-xs">
@@ -96,8 +101,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 </div>
             )}
 
-            {/* 2. 用户提问卡片 */}
-            {parsed.userPrompt && (
+            {/* 2. 用户提问卡片（含多模态图片高性能预览） */}
+            {(parsed.userPrompt || parsed.images.length > 0) && (
                 <div className="bg-blue-50/50 dark:bg-blue-950/20 rounded-xl border border-blue-200/70 dark:border-blue-900/50 overflow-hidden shadow-xs">
                     <div className="flex items-center justify-between px-4 py-2.5 bg-blue-100/50 dark:bg-blue-900/30 border-b border-blue-200/50 dark:border-blue-900/40">
                         <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300 font-bold text-xs">
@@ -105,30 +110,103 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                 <User size={14} />
                             </span>
                             <span>{t('monitor.conversation.user_prompt', '用户提问 (Prompt)')}</span>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => handleCopy(parsed.userPrompt || '', `user-${logId}`)}
-                            className="btn btn-ghost btn-xs gap-1 text-blue-700 dark:text-blue-300 hover:bg-blue-200/50 dark:hover:bg-blue-800/40"
-                            title={t('proxy.config.btn_copy')}
-                        >
-                            {copiedKey === `user-${logId}` ? (
-                                <>
-                                    <CheckCircle size={12} className="text-green-500" />
-                                    <span className="text-[10px] text-green-600 dark:text-green-400 font-semibold">
-                                        {t('proxy.config.btn_copied', '已复制')}
-                                    </span>
-                                </>
-                            ) : (
-                                <>
-                                    <Copy size={12} />
-                                    <span className="text-[10px]">{t('proxy.config.btn_copy', '复制问题')}</span>
-                                </>
+                            {parsed.images.length > 0 && (
+                                <span className="badge badge-sm badge-info badge-outline gap-1 text-[10px]">
+                                    <ImageIcon size={10} />
+                                    {parsed.images.length} {t('monitor.conversation.multimodal_images', '张图片')}
+                                </span>
                             )}
-                        </button>
+                        </div>
+                        {parsed.userPrompt && (
+                            <button
+                                type="button"
+                                onClick={() => handleCopy(parsed.userPrompt || '', `user-${logId}`)}
+                                className="btn btn-ghost btn-xs gap-1 text-blue-700 dark:text-blue-300 hover:bg-blue-200/50 dark:hover:bg-blue-800/40"
+                                title={t('proxy.config.btn_copy')}
+                            >
+                                {copiedKey === `user-${logId}` ? (
+                                    <>
+                                        <CheckCircle size={12} className="text-green-500" />
+                                        <span className="text-[10px] text-green-600 dark:text-green-400 font-semibold">
+                                            {t('proxy.config.btn_copied', '已复制')}
+                                        </span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Copy size={12} />
+                                        <span className="text-[10px]">{t('proxy.config.btn_copy', '复制问题')}</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
                     </div>
-                    <div className="p-4 text-xs leading-relaxed text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-sans select-text max-h-[420px] overflow-y-auto">
-                        {parsed.userPrompt}
+
+                    <div className="p-4 space-y-3">
+                        {/* 提问纯文本（Base64已自动脱敏替换，轻量不卡顿） */}
+                        {parsed.userPrompt ? (
+                            <div className="text-xs leading-relaxed text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-sans select-text max-h-[420px] overflow-y-auto">
+                                {parsed.userPrompt}
+                            </div>
+                        ) : parsed.allMessages.length > 0 ? (
+                            <div className="text-xs italic text-gray-500 dark:text-gray-400">
+                                {t('monitor.conversation.multi_turn_notice', '本轮无单一用户提问（包含工具交互或多轮上下文，详情见下方展开）')}
+                            </div>
+                        ) : null}
+
+                        {/* 多模态图片预览区（高性能缩略图 + 截断保护） */}
+                        {parsed.images.length > 0 && (
+                            <div className="pt-2 border-t border-blue-200/40 dark:border-blue-900/40">
+                                <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-800/90 dark:text-blue-300 mb-2">
+                                    <ImageIcon size={13} />
+                                    <span>{t('monitor.conversation.multimodal_images', '附带图片 (多模态)')}</span>
+                                </div>
+                                <div className="flex flex-wrap gap-2.5 items-center">
+                                    {parsed.images.map((img) => {
+                                        // A. 完整图片：渲染轻量缩略图并支持放大
+                                        if (img.kind === 'url' || (img.kind === 'base64' && img.src)) {
+                                            return (
+                                                <div
+                                                    key={img.id}
+                                                    onClick={() => setPreviewModalImg({ src: img.src!, label: img.label })}
+                                                    className="group relative w-20 h-20 rounded-lg overflow-hidden border border-blue-200 dark:border-blue-800 bg-black/5 dark:bg-black/30 cursor-pointer shadow-xs hover:shadow-sm transition-all"
+                                                    title={t('monitor.conversation.click_to_zoom', '点击查看大图')}
+                                                >
+                                                    <img
+                                                        src={img.src}
+                                                        alt={img.label}
+                                                        loading="lazy"
+                                                        className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+                                                    />
+                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px]">
+                                                        <Eye size={14} />
+                                                        <span className="mt-0.5">{img.sizeHint}</span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+
+                                        // B. 截断受保护图片：渲染防御性安全卡片，杜绝破图崩溃
+                                        return (
+                                            <div
+                                                key={img.id}
+                                                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-100/70 dark:bg-blue-900/40 border border-dashed border-blue-300 dark:border-blue-700 text-xs"
+                                                title={t('monitor.conversation.image_truncated', '图片数据已截断保护 (超出 16KB)')}
+                                            >
+                                                <ShieldCheck size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                                                <div className="flex flex-col">
+                                                    <span className="font-semibold text-blue-950 dark:text-blue-100 text-[11px]">
+                                                        {img.label}
+                                                    </span>
+                                                    <span className="text-[10px] text-blue-700/80 dark:text-blue-300/80">
+                                                        {img.sizeHint || t('monitor.conversation.image_truncated')}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -152,7 +230,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             {parsed.allMessages.map((msg, idx) => (
                                 <div key={idx} className="p-2.5 rounded-lg bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300">
                                     <div className="text-[10px] font-bold uppercase text-gray-500 mb-1 flex items-center gap-1.5">
-                                        <span className={`w-1.5 h-1.5 rounded-full ${msg.role === 'user' ? 'bg-blue-500' : msg.role === 'assistant' ? 'bg-emerald-500' : 'bg-purple-500'}`} />
+                                        <span className={`w-1.5 h-1.5 rounded-full ${msg.role === 'user' ? 'bg-blue-500' : msg.role === 'assistant' ? 'bg-emerald-500' : msg.role === 'tool' ? 'bg-amber-500' : 'bg-purple-500'}`} />
                                         {msg.role}
                                     </div>
                                     <div className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
@@ -260,6 +338,32 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     </div>
                     <div className="p-3 bg-white dark:bg-base-200 rounded-lg border border-red-100 dark:border-red-900/40 font-mono text-xs text-red-600 dark:text-red-400 whitespace-pre-wrap leading-relaxed select-text">
                         {parsed.errorMessage}
+                    </div>
+                </div>
+            )}
+
+            {/* 8. 多模态大图点击放大弹窗 (Lightbox Modal) */}
+            {previewModalImg && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+                    onClick={() => setPreviewModalImg(null)}
+                >
+                    <div
+                        className="relative max-w-3xl max-h-[85vh] bg-white dark:bg-base-100 rounded-2xl overflow-hidden shadow-2xl p-2"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setPreviewModalImg(null)}
+                            className="absolute top-4 right-4 btn btn-circle btn-sm btn-ghost bg-black/50 text-white hover:bg-black/70 z-10"
+                        >
+                            <X size={16} />
+                        </button>
+                        <img
+                            src={previewModalImg.src}
+                            alt={previewModalImg.label}
+                            className="w-auto h-auto max-w-full max-h-[80vh] object-contain rounded-xl mx-auto"
+                        />
                     </div>
                 </div>
             )}

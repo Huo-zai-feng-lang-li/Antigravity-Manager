@@ -579,6 +579,16 @@ pub struct SecurityMonitorConfig {
     /// IP 白名单配置
     #[serde(default)]
     pub whitelist: IpWhitelistConfig,
+
+    /// 是否信任前置代理设置的 X-Forwarded-For / X-Real-IP。
+    /// 仅在 Nginx 等可信反代之后开启；直连部署保持 false 以防伪造。
+    /// Cloudflare 隧道由 public_tunnel_active 自动处理，与此开关无关。
+    #[serde(default)]
+    pub trust_proxy_headers: bool,
+
+    /// 是否允许在线 GeoIP 归属地查询（关闭后零外发，仅保留本机/内网本地标签）。
+    #[serde(default = "default_true")]
+    pub geoip_enabled: bool,
 }
 
 impl Default for SecurityMonitorConfig {
@@ -586,6 +596,8 @@ impl Default for SecurityMonitorConfig {
         Self {
             blacklist: IpBlacklistConfig::default(),
             whitelist: IpWhitelistConfig::default(),
+            trust_proxy_headers: false,
+            geoip_enabled: true,
         }
     }
 }

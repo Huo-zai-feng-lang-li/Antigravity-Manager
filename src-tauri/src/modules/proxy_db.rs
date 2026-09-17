@@ -167,12 +167,18 @@ fn truncate_body(body: &str) -> String {
 fn looks_like_title_request(request_body: &str) -> bool {
     let r = request_body.to_lowercase();
     const KEYWORDS: &[&str] = &[
-        "generate a short title", "task category",
-        "write a 5-10 word title", "respond with the title",
-        "generate a title for", "create a brief title",
-        "title for the conversation", "conversation title",
-        "generate the title", "containing a title",
-        "生成标题", "为对话起个标题",
+        "generate a short title",
+        "task category",
+        "write a 5-10 word title",
+        "respond with the title",
+        "generate a title for",
+        "create a brief title",
+        "title for the conversation",
+        "conversation title",
+        "generate the title",
+        "containing a title",
+        "生成标题",
+        "为对话起个标题",
     ];
     KEYWORDS.iter().any(|k| r.contains(k))
 }
@@ -199,7 +205,11 @@ fn find_title_in_text(text: &str) -> Option<String> {
         }
     }
     let out = out.trim().to_string();
-    if out.is_empty() || out.len() > 100 { None } else { Some(out) }
+    if out.is_empty() || out.len() > 100 {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// 从标题生成请求的响应里提取会话标题。
@@ -818,7 +828,10 @@ mod tests {
         let mut long = "x".repeat(IMAGE_BODY_LIMIT + 25 * 1024);
         long.push_str(r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"#);
         let out = truncate_body(&long);
-        assert!(out.contains("[truncated"), "oversized image body should be truncated");
+        assert!(
+            out.contains("[truncated"),
+            "oversized image body should be truncated"
+        );
         assert!(
             out.contains("images=1"),
             "marker should carry image count: {out}"
@@ -830,14 +843,20 @@ mod tests {
         // 代理聚合后落库格式：{content: "<自然语言>\n{\"title\":...}", usage:{}}
         let req = "Based on the conversation, generate a short title (max 6 words). Conversation: User: 你好";
         let resp = r#"{"content":"Analyzing the input.\n{\"title\":\"日常问候\",\"category\":\"chat\"}","usage":{}}"#;
-        assert_eq!(extract_session_title(req, resp), Some("日常问候".to_string()));
+        assert_eq!(
+            extract_session_title(req, resp),
+            Some("日常问候".to_string())
+        );
     }
 
     #[test]
     fn test_extract_title_top_level() {
         let req = "generate a short title please";
         let resp = r#"{"title":"Debug Login Issue","category":"code"}"#;
-        assert_eq!(extract_session_title(req, resp), Some("Debug Login Issue".to_string()));
+        assert_eq!(
+            extract_session_title(req, resp),
+            Some("Debug Login Issue".to_string())
+        );
     }
 
     #[test]

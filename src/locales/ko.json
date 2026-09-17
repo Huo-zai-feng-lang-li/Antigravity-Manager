@@ -1464,6 +1464,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "차단 해제",
+      "unblock_confirm": "이 IP 를 차단 해제하시겠습니까?",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "블랙리스트 스위치가 꺼져 있어 현재 규칙이 요청을 차단하지 않습니다.",

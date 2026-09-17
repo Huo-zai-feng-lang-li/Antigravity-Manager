@@ -1238,6 +1238,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "إلغاء الحظر",
+      "unblock_confirm": "هل تريد إلغاء حظر هذا IP؟",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "مفتاح القائمة السوداء متوقف — القواعد الحالية لن تمنع أي طلب.",

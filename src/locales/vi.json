@@ -1249,6 +1249,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "Bỏ chặn",
+      "unblock_confirm": "Bỏ chặn IP này?",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "Công tắc danh sách đen đang tắt; các quy tắc sẽ không chặn yêu cầu nào.",

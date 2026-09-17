@@ -1655,7 +1655,7 @@ print(response.choices[0].message.content)`;
                                                 <Settings size={12} />
                                                 {t('proxy.config.zai.models.advanced_title')}
                                             </summary>
-                                            <div className="mt-2 space-y-2 p-2 bg-gray-50 dark:bg-base-200/50 rounded-lg">
+                                            <div className="mt-2 space-y-2 p-2 bg-gray-50 dark:bg-base-200 rounded-lg">
                                                 {/* Advanced Mapping Table */}
                                                 {Object.entries(zaiModelMapping).map(([from, to]) => (
                                                     <div key={from} className="flex items-center gap-2">

@@ -317,7 +317,7 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
             <div className="flex-none flex items-center justify-center pt-2 pb-1 border-t border-gray-100 dark:border-base-200">
                 {/* 标签编辑弹出框 */}
                 {isEditingLabel && (
-                    <div className="absolute inset-0 bg-white/95 dark:bg-base-100/95 rounded-xl z-10 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-white/95 dark:bg-base-100 rounded-xl z-10 flex items-center justify-center p-4">
                         <div className="flex items-center gap-2 w-full max-w-xs">
                             <input
                                 type="text"

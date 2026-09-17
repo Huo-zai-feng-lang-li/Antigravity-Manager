@@ -1464,6 +1464,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "解除ブロック",
+      "unblock_confirm": "この IP のブロックを解除しますか？",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "ブラックリストのスイッチがオフです。ルールはリクエストをブロックしません。",

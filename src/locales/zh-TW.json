@@ -1289,6 +1289,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "解除封鎖",
+      "unblock_confirm": "確定解除這個 IP 的封鎖嗎？",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "黑名單總開關未開啟，目前規則不會攔截任何請求。",

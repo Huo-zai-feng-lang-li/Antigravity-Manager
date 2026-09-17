@@ -80,7 +80,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     <button
                         type="button"
                         onClick={() => setIsSystemOpen(!isSystemOpen)}
-                        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-100/70 dark:bg-base-300/50 hover:bg-gray-100 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-400"
+                        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-100/70 dark:bg-base-300 hover:bg-gray-100 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-400"
                     >
                         <span className="flex items-center gap-2 font-semibold">
                             <Sliders size={14} className="text-purple-500" />
@@ -222,7 +222,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     <button
                         type="button"
                         onClick={() => setIsHistoryOpen(!isHistoryOpen)}
-                        className="w-full flex items-center justify-between px-4 py-2 bg-gray-100/50 dark:bg-base-300/40 hover:bg-gray-100 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-400"
+                        className="w-full flex items-center justify-between px-4 py-2 bg-gray-100/50 dark:bg-base-300 hover:bg-gray-100 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-400"
                     >
                         <span className="flex items-center gap-2 font-medium">
                             <MessageSquare size={14} className="text-blue-500" />
@@ -268,7 +268,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         </div>
                     </button>
                     {isThinkingOpen && (
-                        <div className="p-4 border-t border-amber-200/50 dark:border-amber-900/40 bg-white/60 dark:bg-base-100/60 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs font-sans text-amber-950 dark:text-amber-200/90 leading-relaxed select-text">
+                        <div className="p-4 border-t border-amber-200/50 dark:border-amber-900/40 bg-white/60 dark:bg-base-100 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs font-sans text-amber-950 dark:text-amber-200/90 leading-relaxed select-text">
                             {parsed.thinking}
                         </div>
                     )}

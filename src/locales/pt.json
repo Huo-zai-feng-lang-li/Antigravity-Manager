@@ -1529,6 +1529,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "Desbloquear",
+      "unblock_confirm": "Desbloquear este IP?",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "A lista negra está desativada; as regras não bloquearão nenhuma solicitação.",

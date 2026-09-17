@@ -1200,6 +1200,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "Engeli kaldır",
+      "unblock_confirm": "Bu IP'nin engeli kaldırılsın mı?",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "Kara liste anahtarı kapalı — mevcut kurallar hiçbir isteği engellemez.",

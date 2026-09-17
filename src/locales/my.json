@@ -1182,6 +1182,8 @@
       "add_black": "Add to blacklist",
       "add_white": "Add to whitelist",
       "blocked_tag": "Blocked",
+      "unblock": "Unblock",
+      "unblock_confirm": "Unblock this IP?",
       "whitelisted_tag": "Whitelisted",
       "from_stats_reason": "Blocked manually from statistics",
       "blacklist_disabled_warning": "Blacklist switch is OFF — current rules will not block any request.",

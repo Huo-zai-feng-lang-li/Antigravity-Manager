@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.12 (2026-09-17)**:
+        -   **[Dark Mode UI Fix] Batch removal of daisyUI theme-color opacity modifiers causing light overlays**:
+            -   **Root cause**: daisyUI 5 defines `base-100/200/300` as `oklch()` function values; Tailwind 3.4's `/NN` opacity modifier cannot inject an alpha channel into them, so `dark:bg-base-*/NN` rules are never emitted in the built CSS. In dark mode the unconditional `bg-gray-50/50` on the same line instead wins, painting a 50%-opacity light-gray overlay over dark cards.
+            -   **Scope**: Account detail/error/device-fingerprint dialog headers, AccountCard loading overlay, ConversationView message and thinking blocks, CliSyncCard, OpenCodeSyncModal, CircuitBreaker, PinnedQuotaModels, QuotaProtection, SmartWarmup, BatchImportModal, and the ApiProxy config area — 23 sites across 13 components. All theme-color `/NN` modifiers removed in favor of opaque `dark:bg-base-100/200/300`.
+            -   **i18n**: Added the "Unblock" button copy to ja/ko/es/pt/ru/vi/tr/ar/my/zh-TW locale files.
     *   **v4.8.11 (2026-09-17)**:
         -   **[Security Monitor Fix] Added an "Unblock" action for blocked IPs on the statistics page**:
             -   **Issue**: For an already-blocked (is_blocked=true) IP in the top-IPs ranking, the action column only showed a static red "Blocked" badge with no way to unblock it; when the blacklist management page also failed to list the entry due to memory/DB drift, the user was stuck with no self-serve unblock path.

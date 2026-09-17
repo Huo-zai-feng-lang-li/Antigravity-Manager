@@ -135,16 +135,50 @@ async fn deny(
     });
     let _ = blocking.await;
 
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
+    // 性能：只读 Accept 头与 path（纳秒级），不读 body、不加锁、不做磁盘 IO。
+    // 流式客户端收到非 2xx 的 JSON 错误时不渲染 body.message，会兜底显示 "Invalid API key"；
+    // 对对话流式端点改回 200 + SSE error 事件，让客户端在流内读到自定义拦截文案。
+    let accept = request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let path = uri.path();
+    let wants_sse = accept.contains("text/event-stream")
+        || path == "/v1/responses"
+        || path == "/v1/chat/completions";
+
+    if wants_sse {
+        let payload = json!({
             "error": {
                 "message": message,
                 "type": "invalid_request_error",
                 "code": "ip_forbidden",
                 "param": null
             }
-        })),
-    )
-        .into_response()
+        });
+        let body = format!("event: error\ndata: {}\n\n", payload);
+        (
+            StatusCode::OK,
+            [
+                ("content-type", "text/event-stream; charset=utf-8"),
+                ("cache-control", "no-cache"),
+            ],
+            body,
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "code": "ip_forbidden",
+                    "param": null
+                }
+            })),
+        )
+            .into_response()
+    }
 }

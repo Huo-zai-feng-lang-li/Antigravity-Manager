@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.22 (2026-09-17)**:
+        -   **[Custom block message now reaches the client on streaming endpoints]**:
+            -   Blocking a streaming request (/v1/responses, /v1/chat/completions) previously returned 403 + JSON; the streaming client did not read that body and fell back to "Invalid API key", hiding the custom block message. Streaming requests now get 200 + an SSE error event carrying the custom message; non-streaming requests still get 403 JSON.
+            -   Perf: only reads the Accept header and path (nanoseconds); no request-body buffering, no new locks, no hot-path disk IO.
     *   **v4.8.21 (2026-09-17)**:
         -   **[Remove duplicated icons in the detail view switcher]**:
             -   The "Conversation / Raw Payload" toggle previously stacked a lucide icon together with an emoji (💬/📄) in the label, looking like two icons. The emoji is removed; only the consistent lucide icon remains.

@@ -5910,6 +5910,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                     protocol: Some("openai".to_string()),
                     username: user_token_identity.as_ref().map(|i| i.username.clone()),
                     user_agent: None,
+                    session_title: None,
                 };
                 record_user_token_usage(&user_token_identity, &err_log, user_agent.clone());
                 let _ = state.monitor.log_request(err_log).await;
@@ -6006,6 +6007,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 protocol: Some("openai".to_string()),
                 username: user_token_identity.as_ref().map(|i| i.username.clone()),
                 user_agent: None,
+                session_title: None,
             };
             record_user_token_usage(&turn_identity, &closed_log, user_agent.clone());
             let _ = state.monitor.log_request(closed_log).await;
@@ -6041,6 +6043,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                     protocol: Some("openai".to_string()),
                     username: user_token_identity.as_ref().map(|i| i.username.clone()),
                     user_agent: None,
+                    session_title: None,
                 };
                 record_user_token_usage(&turn_identity, &err_log, user_agent.clone());
                 let _ = state.monitor.log_request(err_log).await;
@@ -6085,6 +6088,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 protocol: Some("openai".to_string()),
                 username: user_token_identity.as_ref().map(|i| i.username.clone()),
                 user_agent: None,
+                session_title: None,
             };
             record_user_token_usage(&turn_identity, &err_log, user_agent.clone());
             let _ = state.monitor.log_request(err_log).await;
@@ -6228,6 +6232,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             protocol: Some("openai".to_string()),
             username: user_token_identity.as_ref().map(|i| i.username.clone()),
             user_agent: None,
+            session_title: None,
         };
 
         record_user_token_usage(&turn_identity, &success_log, user_agent.clone());

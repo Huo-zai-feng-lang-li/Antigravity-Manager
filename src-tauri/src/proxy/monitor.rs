@@ -26,6 +26,8 @@ pub struct ProxyRequestLog {
     pub username: Option<String>, // User token username
     #[serde(default)]
     pub user_agent: Option<String>, // 客户端 User-Agent（用于安全日志检索）
+    #[serde(default)]
+    pub session_title: Option<String>, // 从 response_body 提取的会话标题（仅标题请求有值）
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

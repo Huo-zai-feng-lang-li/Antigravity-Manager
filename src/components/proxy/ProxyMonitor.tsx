@@ -10,7 +10,7 @@ import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
-import { parseLogPayload, extractSessionTitle } from './logPayloadParser';
+import { parseLogPayload } from './logPayloadParser';
 import { ConversationView } from './ConversationView';
 
 
@@ -33,6 +33,7 @@ interface ProxyRequestLog {
     username?: string;
     client_ip?: string;
     protocol?: string;  // "openai" | "anthropic" | "gemini"
+    session_title?: string;
 }
 
 interface ProxyStats {
@@ -116,8 +117,8 @@ const LogTable: React.FC<LogTableProps> = ({
                                 {log.username || '-'}
                             </td>
                             <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="truncate text-[11px] text-purple-600 dark:text-purple-400" style={{ width: '140px', maxWidth: '140px' }} title={extractSessionTitle(log.request_body, log.response_body) || ''}>
-                                {extractSessionTitle(log.request_body, log.response_body) || ''}
+                            <td className="truncate text-[11px] text-purple-600 dark:text-purple-400" style={{ width: '140px', maxWidth: '140px' }} title={log.session_title || ''}>
+                                {log.session_title || ''}
                             </td>
                             <td className="text-right text-[9px]" style={{ width: '90px' }}>
                                 {log.input_tokens != null && <div>{t('monitor.input')}: {formatCompactNumber(log.input_tokens)}</div>}

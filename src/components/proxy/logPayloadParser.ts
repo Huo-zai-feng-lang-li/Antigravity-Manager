@@ -954,19 +954,23 @@ export function parseLogPayload(
  */
 export function extractSessionTitle(requestBody?: string, responseBody?: string): string | null {
     if (!requestBody || !responseBody) return null;
+
     // 与后端 TITLE_KEYWORDS (claude.rs) 对齐：覆盖 Minis/Claude Code 等各客户端的标题生成 prompt
     const titleKeywords = [
         'generate a short title', 'task category',
         'write a 5-10 word title', 'Respond with the title',
         'Generate a title for', 'Create a brief title',
         'title for the conversation', 'conversation title',
+        'Generate the title', 'generate a JSON object containing a title',
         '生成标题', '为对话起个标题',
     ];
-    if (!titleKeywords.some(kw => requestBody.includes(kw))) return null;
+    const looksLikeTitleRequest = titleKeywords.some(kw => requestBody.includes(kw));
 
-    // 优先从结构化 JSON 提取
+    // 优先从结构化 JSON 提取（不依赖关键词：response 里直接有 title 字段就说明是标题请求）
     try {
         const resp = JSON.parse(responseBody);
+        // 直接返回 JSON 的情况：{"title":"...","category":"..."}
+        if (resp?.title && typeof resp.title === 'string') return resp.title;
         // OpenAI: choices[0].message.content
         // Responses API 原始: output_text
         // 代理聚合后落库: 顶层 content（{content: "...", usage: {...}}）
@@ -975,11 +979,10 @@ export function extractSessionTitle(requestBody?: string, responseBody?: string)
             || (typeof resp?.output_text === 'string' ? resp.output_text : null)
             || (typeof resp?.content === 'string' ? resp.content : null);
         if (content && typeof content === 'string') {
-            const title = parseTitleFromContent(content);
+            // JSON 提取：找 {"title":"..."}，普通对话不会有这个结构，安全
+            const title = parseTitleFromContent(content, looksLikeTitleRequest);
             if (title) return title;
         }
-        // 直接返回 JSON 的情况
-        if (resp?.title && typeof resp.title === 'string') return resp.title;
     } catch { /* 非 JSON，走正则 */ }
 
     // 正则兜底：从响应文本里提取 {"title":"..."}
@@ -988,7 +991,7 @@ export function extractSessionTitle(requestBody?: string, responseBody?: string)
     return null;
 }
 
-function parseTitleFromContent(content: string): string | null {
+function parseTitleFromContent(content: string, allowShortText = false): string | null {
     const trimmed = content.trim();
     // 模型可能直接返回 JSON，也可能 JSON 包在文本里
     const jsonMatch = trimmed.match(/\{[^{}]*"title"[^{}]*\}/);
@@ -998,8 +1001,8 @@ function parseTitleFromContent(content: string): string | null {
             if (obj?.title) return String(obj.title);
         } catch { /* fallthrough */ }
     }
-    // 模型可能只返回标题文本（不带 category）
-    if (trimmed.length <= 50 && !trimmed.includes('{') && !trimmed.includes('}')) {
+    // 模型可能只返回标题文本（不带 category）；仅在 request 像标题请求时才采信短文本
+    if (allowShortText && trimmed.length <= 50 && !trimmed.includes('{') && !trimmed.includes('}')) {
         return trimmed;
     }
     return null;

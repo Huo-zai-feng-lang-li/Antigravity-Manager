@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.17 (2026-09-17)**:
+        -   **[流量日志会话标题列真正修复]**:
+            -   **根因**: 列表 API SQL 故意 `NULL as request_body/response_body`（性能），前端 extractSessionTitle 拿到空 body 永远提取不出标题。
+            -   **修法**: SQL 里用 SQLite json_extract 直接从 response_body 提取 title 字段作为 session_title 计算列返回，不读全量 body；ProxyRequestLog 加 session_title 字段；前端列表直接读 log.session_title。
     *   **v4.8.16 (2026-09-17)**:
         -   **[用户Token横向滚动彻底消除+Windows构建加速]**:
             -   **表格 table-fixed**: 表格加 table-fixed，列宽固定分配，不再被长内容撑宽导致横向滚动条。

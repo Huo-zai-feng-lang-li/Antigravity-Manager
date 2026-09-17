@@ -195,9 +195,14 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 NULL as request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username
-         FROM request_logs 
-         ORDER BY timestamp DESC 
+                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                COALESCE(
+                    json_extract(request_logs.response_body, '$.title'),
+                    json_extract(json_extract(request_logs.response_body, '$.content'), '$.title'),
+                    json_extract(json_extract(request_logs.response_body, '$.choices[0].message.content'), '$.title')
+                ) as session_title
+         FROM request_logs
+         ORDER BY timestamp DESC
          LIMIT ?1 OFFSET ?2",
         )
         .map_err(|e| e.to_string())?;
@@ -224,6 +229,7 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
                 client_ip: row.get(16).unwrap_or(None),
                 username: row.get(17).unwrap_or(None),
                 user_agent: None,
+                session_title: row.get(18).unwrap_or(None),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -299,6 +305,7 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
             client_ip: row.get(16).unwrap_or(None),
             username: row.get(17).unwrap_or(None),
             user_agent: None,
+            session_title: None,
         })
     })
     .map_err(|e| e.to_string())
@@ -461,6 +468,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
+                    session_title: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -489,6 +497,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
+                    session_title: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -517,6 +526,7 @@ pub fn get_logs_filtered(
                     client_ip: row.get(16).unwrap_or(None),
                     username: row.get(17).unwrap_or(None),
                     user_agent: None,
+                    session_title: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -562,6 +572,7 @@ pub fn get_all_logs_for_export() -> Result<Vec<ProxyRequestLog>, String> {
                 client_ip: row.get(16).unwrap_or(None),
                 username: row.get(17).unwrap_or(None),
                 user_agent: None,
+                session_title: None,
             })
         })
         .map_err(|e| e.to_string())?;

@@ -252,6 +252,7 @@ pub async fn handle_warmup(
                 protocol: Some("warmup".to_string()),
                 username: None,
                 user_agent: None,
+                session_title: None,
             };
             state.monitor.log_request(log).await;
 
@@ -351,6 +352,7 @@ pub async fn handle_warmup(
                 protocol: Some("warmup".to_string()),
                 username: None,
                 user_agent: None,
+                session_title: None,
             };
             state.monitor.log_request(log).await;
 

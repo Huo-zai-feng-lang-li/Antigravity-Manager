@@ -430,7 +430,7 @@ const UserToken: React.FC = () => {
 
             {/* Token List */}
             <div className="flex-1 min-w-0 overflow-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
-                <table className="table table-pin-rows w-full">
+                <table className="table table-pin-rows w-full table-fixed">
                     <thead>
                         <tr className="bg-gray-50 dark:bg-base-200">
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.username', { defaultValue: 'Username' })}</th>

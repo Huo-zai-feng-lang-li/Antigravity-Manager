@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.16 (2026-09-17)**:
+        -   **[用户Token横向滚动彻底消除+Windows构建加速]**:
+            -   **表格 table-fixed**: 表格加 table-fixed，列宽固定分配，不再被长内容撑宽导致横向滚动条。
+            -   **Windows 构建只出 NSIS exe**: bundle.targets 从 all 改为 ["nsis"]，不再同时打 MSI，加快 CI 构建速度。
     *   **v4.8.15 (2026-09-17)**:
         -   **[对话视图截断图片占位修正]**:
             -   **截断图片灰色小占位**: 被日志长度上限截断的多模态图片（base64 中间被砍、无法还原），不再无显示，改为灰色小占位条显示 mime 类型；完整图片（base64/url）仍显示缩略图并可点击放大。

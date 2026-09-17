@@ -429,7 +429,7 @@ const UserToken: React.FC = () => {
             </div>
 
             {/* Token List */}
-            <div className="flex-1 overflow-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
+            <div className="flex-1 min-w-0 overflow-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
                 <table className="table table-pin-rows">
                     <thead>
                         <tr className="bg-gray-50 dark:bg-base-200">

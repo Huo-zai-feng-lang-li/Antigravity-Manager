@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.13 (2026-09-17)**:
+        -   **[Conversation View & User Token Page: Three UI Fixes]**:
+            -   **Truncated multimodal images no longer render a blue placeholder card**: Images truncated by the logger (kind=truncated, no actual data) no longer render a dashed blue placeholder card, removing the duplicate placeholder alongside the inline `[图片: mime]` text; real images (url/base64) still render thumbnails with click-to-zoom.
+            -   **User Token page horizontal scrollbar**: Added `min-w-0` to the table container, fixing a flex child being stretched by table content and producing a full-page horizontal scrollbar.
+            -   **"Old version" misreport fixed**: When a request body is head/tail-truncated, the UI no longer claims "this log was produced by an old version"; it now says "request body exceeded the log size limit and was head/tail-truncated, middle omitted, user prompt may be incomplete".
     *   **v4.8.12 (2026-09-17)**:
         -   **[Dark Mode UI Fix] Batch removal of daisyUI theme-color opacity modifiers causing light overlays**:
             -   **Root cause**: daisyUI 5 defines `base-100/200/300` as `oklch()` function values; Tailwind 3.4's `/NN` opacity modifier cannot inject an alpha channel into them, so `dark:bg-base-*/NN` rules are never emitted in the built CSS. In dark mode the unconditional `bg-gray-50/50` on the same line instead wins, painting a 50%-opacity light-gray overlay over dark cards.

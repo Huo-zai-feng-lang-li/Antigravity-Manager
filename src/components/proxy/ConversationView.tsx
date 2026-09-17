@@ -13,7 +13,6 @@ import {
     MessageSquare,
     Image as ImageIcon,
     Eye,
-    ShieldCheck,
     X
 } from 'lucide-react';
 import { ParsedConversation } from './logPayloadParser';
@@ -154,12 +153,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         ) : parsed.requestTruncated ? (
                             <div className="text-xs italic text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
                                 <AlertTriangle size={13} className="shrink-0 text-amber-500" />
-                                {t('monitor.conversation.user_input_lost', '该日志产生于旧版本，超长请求只保存了开头，用户提问未入库；新版本已改为头尾保留')}
+                                {t('monitor.conversation.user_input_lost', '该请求体超过日志长度上限已做头尾截断，中间部分被省略，用户提问可能不完整')}
                             </div>
                         ) : null}
 
-                        {/* 多模态图片预览区（高性能缩略图 + 截断保护） */}
-                        {parsed.images.length > 0 && (
+                        {/* 多模态图片预览区（仅渲染可预览图片；截断图片正文已有 [图片: mime] 文本占位，不再单独出蓝卡片） */}
+                        {parsed.images.some(img => img.kind === 'url' || (img.kind === 'base64' && img.src)) && (
                             <div className="pt-2 border-t border-blue-200/40 dark:border-blue-900/40">
                                 <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-800/90 dark:text-blue-300 mb-2">
                                     <ImageIcon size={13} />
@@ -167,9 +166,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                 </div>
                                 <div className="flex flex-wrap gap-2.5 items-center">
                                     {parsed.images.map((img) => {
-                                        // A. 完整图片：渲染轻量缩略图并支持放大
-                                        if (img.kind === 'url' || (img.kind === 'base64' && img.src)) {
-                                            return (
+                                        // 仅渲染可预览图片；truncated 无 src，跳过
+                                        if (!(img.kind === 'url' || (img.kind === 'base64' && img.src))) return null;
+                                        return (
                                                 <div
                                                     key={img.id}
                                                     onClick={() => setPreviewModalImg({ src: img.src!, label: img.label })}
@@ -188,26 +187,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                                     </div>
                                                 </div>
                                             );
-                                        }
-
-                                        // B. 截断受保护图片：渲染防御性安全卡片，杜绝破图崩溃
-                                        return (
-                                            <div
-                                                key={img.id}
-                                                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-100/70 dark:bg-blue-900/40 border border-dashed border-blue-300 dark:border-blue-700 text-xs"
-                                                title={t('monitor.conversation.image_truncated', '图片数据已截断保护（超出日志长度上限）')}
-                                            >
-                                                <ShieldCheck size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                                                <div className="flex flex-col">
-                                                    <span className="font-semibold text-blue-950 dark:text-blue-100 text-[11px]">
-                                                        {img.label}
-                                                    </span>
-                                                    <span className="text-[10px] text-blue-700/80 dark:text-blue-300/80">
-                                                        {img.sizeHint || t('monitor.conversation.image_truncated')}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        );
                                     })}
                                 </div>
                             </div>

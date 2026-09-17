@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.14 (2026-09-17)**:
+        -   **[Session Title Extraction & User Token Horizontal Scrollbar]**:
+            -   **Session title now extracted correctly**: Fixed /v1/responses protocol where the proxy aggregates the response as `{content:"...",usage:{...}}`; this shape was not recognized, leaving the session title column empty. Title-detection keywords now align with backend TITLE_KEYWORDS, covering Claude Code prompts like "write a 5-10 word title".
+            -   **User Token page horizontal scrollbar eliminated**: Removed max-w-7xl width cap on the root container and added w-full to the table, so the 7 columns fill available width on wide screens instead of overflowing.
     *   **v4.8.13 (2026-09-17)**:
         -   **[Conversation View & User Token Page: Three UI Fixes]**:
             -   **Truncated multimodal images no longer render a blue placeholder card**: Images truncated by the logger (kind=truncated, no actual data) no longer render a dashed blue placeholder card, removing the duplicate placeholder alongside the inline `[图片: mime]` text; real images (url/base64) still render thumbnails with click-to-zoom.

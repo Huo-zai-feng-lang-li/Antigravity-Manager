@@ -344,7 +344,7 @@ const UserToken: React.FC = () => {
         <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="h-full flex flex-col p-5 gap-5 max-w-7xl mx-auto w-full"
+            className="h-full flex flex-col p-5 gap-5 w-full"
         >
             {/* Header */}
             <div className="flex justify-between items-center">
@@ -430,7 +430,7 @@ const UserToken: React.FC = () => {
 
             {/* Token List */}
             <div className="flex-1 min-w-0 overflow-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
-                <table className="table table-pin-rows">
+                <table className="table table-pin-rows w-full">
                     <thead>
                         <tr className="bg-gray-50 dark:bg-base-200">
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.username', { defaultValue: 'Username' })}</th>

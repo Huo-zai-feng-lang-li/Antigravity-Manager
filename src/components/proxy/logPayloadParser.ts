@@ -954,15 +954,26 @@ export function parseLogPayload(
  */
 export function extractSessionTitle(requestBody?: string, responseBody?: string): string | null {
     if (!requestBody || !responseBody) return null;
-    if (!requestBody.includes('generate a short title') && !requestBody.includes('task category')) return null;
+    // 与后端 TITLE_KEYWORDS (claude.rs) 对齐：覆盖 Minis/Claude Code 等各客户端的标题生成 prompt
+    const titleKeywords = [
+        'generate a short title', 'task category',
+        'write a 5-10 word title', 'Respond with the title',
+        'Generate a title for', 'Create a brief title',
+        'title for the conversation', 'conversation title',
+        '生成标题', '为对话起个标题',
+    ];
+    if (!titleKeywords.some(kw => requestBody.includes(kw))) return null;
 
     // 优先从结构化 JSON 提取
     try {
         const resp = JSON.parse(responseBody);
         // OpenAI: choices[0].message.content
+        // Responses API 原始: output_text
+        // 代理聚合后落库: 顶层 content（{content: "...", usage: {...}}）
         const content = resp?.choices?.[0]?.message?.content
             || resp?.choices?.[0]?.text
-            || (typeof resp?.output_text === 'string' ? resp.output_text : null);
+            || (typeof resp?.output_text === 'string' ? resp.output_text : null)
+            || (typeof resp?.content === 'string' ? resp.content : null);
         if (content && typeof content === 'string') {
             const title = parseTitleFromContent(content);
             if (title) return title;

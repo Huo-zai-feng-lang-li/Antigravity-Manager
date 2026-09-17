@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.20 (2026-09-17)**:
+        -   **[Auto-refresh session titles + green title column]**:
+            -   **Titles no longer require manual refresh**: The client generates the session title as a separate async request a few seconds after the chat finishes. The desktop UI previously relied on events alone and missed this update; the list now auto-polls every 5 seconds in all modes, so titles appear within seconds after they land.
+            -   **Session title column is now green** for clear contrast in both light and dark themes.
+            -   **Image display note**: Since v4.8.19 image bodies up to 10MB are stored verbatim; a controlled check confirms the frontend now detects the full base64 and renders the thumbnail. Old records truncated by the previous build cannot be recovered—send a new chat with an image to verify.
     *   **v4.8.19 (2026-09-17)**:
         -   **[Session title & inline images fixed at storage layer, with unit tests]**:
             -   **Title root cause**: The list/detail SQL returned `NULL as request_body/response_body` for performance, so the frontend could never extract a title; v4.8.17's SQL `json_extract` also failed on the proxy's aggregated content (natural-language analysis followed by an embedded JSON).

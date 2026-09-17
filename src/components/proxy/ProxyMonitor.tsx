@@ -117,7 +117,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                 {log.username || '-'}
                             </td>
                             <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="truncate text-[11px] text-purple-600 dark:text-purple-400" style={{ width: '140px', maxWidth: '140px' }} title={log.session_title || ''}>
+                            <td className="truncate text-[11px] text-green-600 dark:text-green-400" style={{ width: '140px', maxWidth: '140px' }} title={log.session_title || ''}>
                                 {log.session_title || ''}
                             </td>
                             <td className="text-right text-[9px]" style={{ width: '90px' }}>
@@ -380,17 +380,15 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         };
         setupListener();
 
-        // Web 模式補強：如果不是 Tauri 環境，則啟用定時輪詢
+        // 所有模式启用定时轮询：异步标题请求通常在对话完成数秒后才落库，
+        // 桌面模式仅凭事件监听可能收不到该次更新，轮询保证列表几秒内自动刷新出标题
         let pollInterval: number | null = null;
-        if (!isTauri()) {
-            console.debug('[ProxyMonitor] Web mode detected, starting auto-poll (10s)');
-            pollInterval = window.setInterval(() => {
-                if (isMountedRef.current && !loading) {
-                    // [FIX] 使用 ref.current 获取最新的筛选条件
-                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
-                }
-            }, 10000);
-        }
+        pollInterval = window.setInterval(() => {
+            if (isMountedRef.current && !loading) {
+                // [FIX] 使用 ref.current 获取最新的筛选条件
+                loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+            }
+        }, 5000);
 
         return () => {
             isMountedRef.current = false;

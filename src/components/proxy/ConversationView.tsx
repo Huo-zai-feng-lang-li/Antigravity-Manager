@@ -157,8 +157,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             </div>
                         ) : null}
 
-                        {/* 多模态图片预览区（仅渲染可预览图片；截断图片正文已有 [图片: mime] 文本占位，不再单独出蓝卡片） */}
-                        {parsed.images.some(img => img.kind === 'url' || (img.kind === 'base64' && img.src)) && (
+                        {/* 多模态图片预览区：真图出缩略图，截断图出灰色小占位（不再出大蓝卡片） */}
+                        {parsed.images.length > 0 && (
                             <div className="pt-2 border-t border-blue-200/40 dark:border-blue-900/40">
                                 <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-800/90 dark:text-blue-300 mb-2">
                                     <ImageIcon size={13} />
@@ -166,9 +166,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                 </div>
                                 <div className="flex flex-wrap gap-2.5 items-center">
                                     {parsed.images.map((img) => {
-                                        // 仅渲染可预览图片；truncated 无 src，跳过
-                                        if (!(img.kind === 'url' || (img.kind === 'base64' && img.src))) return null;
-                                        return (
+                                        // 真图：缩略图可点击放大
+                                        if (img.kind === 'url' || (img.kind === 'base64' && img.src)) {
+                                            return (
                                                 <div
                                                     key={img.id}
                                                     onClick={() => setPreviewModalImg({ src: img.src!, label: img.label })}
@@ -187,6 +187,18 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                                                     </div>
                                                 </div>
                                             );
+                                        }
+                                        // 截断图：灰色小占位条，不抢视觉
+                                        return (
+                                            <div
+                                                key={img.id}
+                                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gray-100 dark:bg-base-300 text-[10px] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-base-300"
+                                                title={img.sizeHint || t('monitor.conversation.image_truncated', '图片数据已截断')}
+                                            >
+                                                <ImageIcon size={12} className="shrink-0" />
+                                                <span>{img.mimeType || 'image'}</span>
+                                            </div>
+                                        );
                                     })}
                                 </div>
                             </div>

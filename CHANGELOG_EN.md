@@ -3,6 +3,9 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.15 (2026-09-17)**:
+        -   **[Truncated Image Placeholder]**:
+            -   **Truncated images now show a gray pill**: Multimodal images truncated by the log size limit (base64 middle cut, unrecoverable) no longer vanish; they show a small gray pill with the mime type. Complete images (base64/url) still render thumbnails with click-to-zoom.
     *   **v4.8.14 (2026-09-17)**:
         -   **[Session Title Extraction & User Token Horizontal Scrollbar]**:
             -   **Session title now extracted correctly**: Fixed /v1/responses protocol where the proxy aggregates the response as `{content:"...",usage:{...}}`; this shape was not recognized, leaving the session title column empty. Title-detection keywords now align with backend TITLE_KEYWORDS, covering Claude Code prompts like "write a 5-10 word title".

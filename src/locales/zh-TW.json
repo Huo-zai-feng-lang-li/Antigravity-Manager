@@ -1028,8 +1028,8 @@
     },
     "details": {
       "title": "請求詳情",
-      "tab_conversation": "💬 對話檢視",
-      "tab_raw": "📄 原始封包",
+      "tab_conversation": "對話檢視",
+      "tab_raw": "原始封包",
       "request_payload": "請求封包 (Request)",
       "response_payload": "回應封包 (Response)",
       "duration": "耗時",

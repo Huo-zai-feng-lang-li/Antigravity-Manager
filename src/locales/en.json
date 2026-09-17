@@ -1187,8 +1187,8 @@
     },
     "details": {
       "title": "Request Details",
-      "tab_conversation": "💬 Conversation",
-      "tab_raw": "📄 Raw Payload",
+      "tab_conversation": "Conversation",
+      "tab_raw": "Raw Payload",
       "request_payload": "Request Payload",
       "response_payload": "Response Payload",
       "duration": "Duration",

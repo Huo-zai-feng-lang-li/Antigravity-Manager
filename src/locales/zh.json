@@ -1180,8 +1180,8 @@
     },
     "details": {
       "title": "请求详情",
-      "tab_conversation": "💬 对话视图",
-      "tab_raw": "📄 原始报文",
+      "tab_conversation": "对话视图",
+      "tab_raw": "原始报文",
       "request_payload": "请求报文 (Request)",
       "response_payload": "响应报文 (Response)",
       "duration": "耗时",

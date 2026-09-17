@@ -688,7 +688,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                         }`}
                                     >
                                         <MessageSquare size={13} />
-                                        <span>{t('monitor.details.tab_conversation', '💬 对话视图')}</span>
+                                        <span>{t('monitor.details.tab_conversation', '对话视图')}</span>
                                     </button>
                                     <button
                                         type="button"
@@ -700,7 +700,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                         }`}
                                     >
                                         <Code2 size={13} />
-                                        <span>{t('monitor.details.tab_raw', '📄 原始报文')}</span>
+                                        <span>{t('monitor.details.tab_raw', '原始报文')}</span>
                                     </button>
                                 </div>
 

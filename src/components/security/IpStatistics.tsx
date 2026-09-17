@@ -91,6 +91,19 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
         }
     };
 
+    const unblock = async (ip: string) => {
+        try {
+            await invoke('remove_ip_from_blacklist', { ipPattern: ip });
+            setStats(prev => prev ? {
+                ...prev,
+                top_ips: prev.top_ips.map(r => r.client_ip === ip ? { ...r, is_blocked: false } : r),
+            } : prev);
+            showToast(t('security.rules.remove_success'), 'success');
+        } catch (e) {
+            showToast(String(e), 'error');
+        }
+    };
+
     const rangeLabel = () => {
         const found = RANGES.find(r => r.value === timeRange);
         return found ? t(found.key) : `${timeRange}h`;
@@ -118,7 +131,14 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                         <ShieldOff size={13} />
                     </button>
                 ) : (
-                    <span className="badge badge-xs badge-error gap-1 text-white"><ShieldOff size={10} />{t('security.rules.blocked_tag')}</span>
+                    <button
+                        className="btn btn-xs btn-ghost text-red-400 gap-1 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        title={t('security.rules.unblock')}
+                        onClick={() => unblock(ip)}
+                    >
+                        <ShieldOff size={13} />
+                        <span className="text-[10px]">{t('security.rules.blocked_tag')}</span>
+                    </button>
                 )}
                 {!isWhite ? (
                     <button

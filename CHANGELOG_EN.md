@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.11 (2026-09-17)**:
+        -   **[Security Monitor Fix] Added an "Unblock" action for blocked IPs on the statistics page**:
+            -   **Issue**: For an already-blocked (is_blocked=true) IP in the top-IPs ranking, the action column only showed a static red "Blocked" badge with no way to unblock it; when the blacklist management page also failed to list the entry due to memory/DB drift, the user was stuck with no self-serve unblock path.
+            -   **Fix**: Replaced the static badge with a clickable red "Unblock" button that invokes `remove_ip_from_blacklist` and immediately flips that row's `is_blocked` to false, with success/error toasts.
     *   **v4.8.8 (2026-09-17)**:
         -   **[API Monitor Upgrade] Added Dual "Conversation View" & "Raw Payload" Modes in Details Drawer**:
             -   **One-Click Dual View Switching**: Added a segmented pill switcher at the top of the request details drawer, defaulting to a clean and structured "💬 Conversation View" while keeping the "📄 Raw Payload" tab for low-level inspection.

@@ -1453,6 +1453,8 @@
       "add_black": "加入黑名单",
       "add_white": "加入白名单",
       "blocked_tag": "已封禁",
+      "unblock": "解除封禁",
+      "unblock_confirm": "确定解除 {{ip}} 的封禁吗？",
       "whitelisted_tag": "已加白",
       "from_stats_reason": "从统计页手动封禁",
       "blacklist_disabled_warning": "黑名单总开关未开启，当前规则不会拦截任何请求。",

@@ -468,12 +468,15 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         setCopiedRequestId(null);
     }, [selectedLog?.id]);
 
-    // 打开详情时自动滚动到 tab 栏位置，让对话视图立即可见
+    // 打开详情时自动平滑滚动到 tab 栏位置，让对话视图立即可见
     useEffect(() => {
         if (selectedLog && detailScrollRef.current && detailTabRef.current) {
             const raf = requestAnimationFrame(() => {
                 if (detailScrollRef.current && detailTabRef.current) {
-                    detailScrollRef.current.scrollTop = detailTabRef.current.offsetTop - 16;
+                    detailScrollRef.current.scrollTo({
+                        top: detailTabRef.current.offsetTop - 16,
+                        behavior: 'smooth'
+                    });
                 }
             });
             return () => cancelAnimationFrame(raf);

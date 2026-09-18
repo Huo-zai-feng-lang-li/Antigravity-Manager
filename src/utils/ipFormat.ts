@@ -67,27 +67,34 @@ export interface IpDisplay {
 }
 
 /**
- * 组合 IP 展示信息。`t` 用于本地标签 i18n，缺失时回退英文。
+ * 组合 IP 展示信息。`t` 用于本地标签 i18n，缺失时回退默认中文。
  */
 export function describeIp(
     rawIp: string,
-    geo: IpGeoInfo | undefined,
-    t: (key: string) => string,
+    geo?: IpGeoInfo | null,
+    t?: (key: string) => string,
 ): IpDisplay {
     const ip = displayIp(rawIp);
     const kind = classifyIp(ip);
     const v6 = isIpv6(ip);
 
+    const fallbackLabels: Record<IpKind, string> = {
+        loopback: '本地回环',
+        private: '局域网',
+        linklocal: '链路本地',
+        public: '公网',
+    };
+
     const localLabels: Record<IpKind, string> = {
-        loopback: t('security.ip_kind.loopback') || 'Localhost',
-        private: t('security.ip_kind.private') || 'Private network',
-        linklocal: t('security.ip_kind.linklocal') || 'Link-local',
+        loopback: (t ? t('security.ip_kind.loopback') : null) || fallbackLabels.loopback,
+        private: (t ? t('security.ip_kind.private') : null) || fallbackLabels.private,
+        linklocal: (t ? t('security.ip_kind.linklocal') : null) || fallbackLabels.linklocal,
         public: '',
     };
 
     let detail = geoText(geo) || '';
     if (kind !== 'public') {
-        detail = localLabels[kind];
+        detail = localLabels[kind] || fallbackLabels[kind];
     }
 
     return { ip, detail, kind, isIpv6: v6 };

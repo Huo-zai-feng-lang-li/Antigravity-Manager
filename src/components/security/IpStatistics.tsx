@@ -4,7 +4,11 @@ import { Activity, ShieldAlert, Users, Globe, ShieldOff, ShieldCheck } from 'luc
 import { request as invoke } from '../../utils/request';
 import { showToast } from '../common/ToastContainer';
 import { formatCompactNumber } from '../../utils/format';
-import { describeIp, compactIp } from '../../utils/ipFormat';
+import { describeIp } from '../../utils/ipFormat';
+import ClickableIp from './ClickableIp';
+import IpRiskBadge from './IpRiskBadge';
+import { getRiskMeta, getRiskTags } from './IpThreatCard';
+import { enrichIpListGeo } from '../../utils/ipThreatCache';
 import type { IpStatsResponse, IpTokenStats, IpRanking } from '../../types/security';
 import { isTauri } from '../../utils/env';
 
@@ -27,7 +31,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
     const [stats, setStats] = useState<IpStatsResponse | null>(null);
     const [tokenStats, setTokenStats] = useState<IpTokenStats[]>([]);
     const [loading, setLoading] = useState(false);
-    const [timeRange, setTimeRange] = useState<number>(24);
+    const [timeRange, setTimeRange] = useState<number>(1);
     const [whitelisted, setWhitelisted] = useState<Set<string>>(new Set());
     const enrichTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** 每个时间窗周期最多补刷一次归属地，离线/限流时不退化为轮询 */
@@ -43,6 +47,22 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
             ]);
             setStats(statsData);
             setTokenStats(tokenData || []);
+
+            // 自动补全/富化 IP 风险画像（Web 模式或后端未全量返回时无缝降级兜底）
+            if (statsData?.top_ips?.length) {
+                enrichIpListGeo(statsData.top_ips).then(({ changed, items }) => {
+                    if (changed) {
+                        setStats(prev => prev ? { ...prev, top_ips: items } : prev);
+                    }
+                }).catch(() => {});
+            }
+            if (tokenData?.length) {
+                enrichIpListGeo(tokenData).then(({ changed, items }) => {
+                    if (changed) {
+                        setTokenStats(items);
+                    }
+                }).catch(() => {});
+            }
 
             const pendingGeo = [
                 ...(statsData?.top_ips || []).filter((r: IpRanking) => !r.geo),
@@ -222,7 +242,7 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                 <div className="bg-white dark:bg-base-200 rounded-xl shadow-sm border border-gray-100 dark:border-base-300 overflow-hidden">
                     <div className="p-4 border-b border-gray-100 dark:border-base-300 flex items-center gap-2">
                         <Globe size={20} className="text-blue-500" />
-                        <h3 className="font-bold text-lg">{t('security.stats.top_ips')} ({rangeLabel()})</h3>
+                        <h3 className="font-bold text-lg text-slate-900 dark:text-slate-100">{t('security.stats.top_ips')} ({rangeLabel()})</h3>
                     </div>
                     <div className="overflow-x-auto">
                         <table className="table w-full">
@@ -241,8 +261,41 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                                     return (
                                         <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
                                             <td className="font-bold text-gray-400">#{index + 1}</td>
-                                            <td className="font-mono font-medium" title={desc.ip}>{compactIp(desc.ip)}</td>
-                                            <td className="text-xs text-gray-600 dark:text-gray-300">{desc.detail || '-'}</td>
+                                            <td className="font-mono font-medium">
+                                                <ClickableIp ip={ip.client_ip} showV6Badge />
+                                            </td>
+                                            <td className="text-xs text-slate-800 dark:text-slate-200">
+                                                <IpRiskBadge ip={ip.client_ip} geo={ip.geo}>
+                                                    {(() => {
+                                                        const rawScore = ip.geo?.risk_score?.trim();
+                                                        const riskMeta = rawScore ? getRiskMeta(rawScore) : null;
+                                                        const tags = getRiskTags(ip.geo);
+                                                        return (
+                                                            <div className="inline-flex items-center gap-1.5 flex-wrap cursor-pointer group">
+                                                                <span className="text-slate-800 dark:text-slate-200 font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                                                    {desc.detail || '-'}
+                                                                </span>
+                                                                {riskMeta && (
+                                                                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold border select-none transition-all duration-150 group-hover:scale-105 ${riskMeta.badgeBg}`}>
+                                                                        {React.createElement(riskMeta.icon, { size: 12, className: 'shrink-0' })}
+                                                                        <span>{rawScore}</span>
+                                                                    </span>
+                                                                )}
+                                                                {tags.map((tag, idx) => (
+                                                                    <span
+                                                                        key={idx}
+                                                                        className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border select-none transition-all duration-150 ${
+                                                                            riskMeta?.badgeBg || 'bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/60'
+                                                                        }`}
+                                                                    >
+                                                                        {tag}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        );
+                                                    })()}
+                                                </IpRiskBadge>
+                                            </td>
                                             <td className="text-right font-mono">{formatCompactNumber(ip.request_count)}</td>
                                             <td><RuleButtons ip={ip.client_ip} blocked={ip.is_blocked} /></td>
                                         </tr>
@@ -259,12 +312,16 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                 {/* Token 消耗活跃度 */}
                 <div className="bg-white dark:bg-base-200 rounded-xl shadow-sm border border-gray-100 dark:border-base-300 overflow-hidden">
                     <div className="p-4 border-b border-gray-100 dark:border-base-300 flex items-center justify-between gap-2 flex-wrap">
-                        <h3 className="font-bold text-lg">{t('security.stats.ip_activity_token_usage')}</h3>
-                        <div className="flex gap-1">
+                        <h3 className="font-bold text-lg text-slate-900 dark:text-slate-100">{t('security.stats.ip_activity_token_usage')}</h3>
+                        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-900 border border-gray-200/50 dark:border-slate-700/60 rounded-lg p-0.5">
                             {RANGES.map(r => (
                                 <button
                                     key={r.value}
-                                    className={`btn btn-xs min-w-[48px] ${timeRange === r.value ? 'btn-active btn-primary' : ''}`}
+                                    className={`px-3 py-1 text-xs rounded-md transition-all duration-200 ${
+                                        timeRange === r.value
+                                            ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 font-medium shadow-sm'
+                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                                    }`}
                                     onClick={() => setTimeRange(r.value)}
                                 >
                                     {t(r.key)}
@@ -298,10 +355,43 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                                     return (
                                         <tr key={ip.client_ip} className="hover:bg-gray-50 dark:hover:bg-base-300">
                                             <td className="font-bold text-gray-400">#{index + 1}</td>
-                                            <td className="font-mono font-medium" title={desc.ip}>
-                                                {compactIp(desc.ip)}
+                                            <td>
+                                                <div className="leading-tight">
+                                                    <ClickableIp ip={ip.client_ip} showV6Badge />
+                                                </div>
                                                 {desc.detail && (
-                                                    <div className="text-[11px] text-gray-500 dark:text-gray-400 font-normal">{desc.detail}</div>
+                                                    <div className="text-[11px] text-slate-700 dark:text-slate-300 font-medium mt-0.5">
+                                                        <IpRiskBadge ip={ip.client_ip} geo={ip.geo}>
+                                                            {(() => {
+                                                                const rawScore = ip.geo?.risk_score?.trim();
+                                                                const riskMeta = rawScore ? getRiskMeta(rawScore) : null;
+                                                                const tags = getRiskTags(ip.geo);
+                                                                return (
+                                                                    <div className="inline-flex items-center gap-1.5 flex-wrap cursor-pointer group">
+                                                                        <span className="text-slate-700 dark:text-slate-300 font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                                                            {desc.detail}
+                                                                        </span>
+                                                                        {riskMeta && (
+                                                                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border select-none transition-all duration-150 group-hover:scale-105 ${riskMeta.badgeBg}`}>
+                                                                                {React.createElement(riskMeta.icon, { size: 11, className: 'shrink-0' })}
+                                                                                <span>{rawScore}</span>
+                                                                            </span>
+                                                                        )}
+                                                                        {tags.map((tag, idx) => (
+                                                                            <span
+                                                                                key={idx}
+                                                                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border select-none transition-all duration-150 ${
+                                                                                    riskMeta?.badgeBg || 'bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/60'
+                                                                                }`}
+                                                                            >
+                                                                                {tag}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </IpRiskBadge>
+                                                    </div>
                                                 )}
                                             </td>
                                             <td className="font-medium text-blue-600 dark:text-blue-400">{ip.username || '-'}</td>
@@ -317,8 +407,8 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
                                                 </div>
                                             </td>
                                             <td className={`text-right font-mono text-lg ${colorClass}`}>{formatCompactNumber(ip.total_tokens)}</td>
-                                            <td className="text-right font-mono text-gray-500 text-xs">{formatCompactNumber(ip.input_tokens)}</td>
-                                            <td className="text-right font-mono text-gray-500 text-xs">{formatCompactNumber(ip.output_tokens)}</td>
+                                            <td className="text-right font-mono text-slate-700 dark:text-slate-200 text-xs font-semibold">{formatCompactNumber(ip.input_tokens)}</td>
+                                            <td className="text-right font-mono text-slate-700 dark:text-slate-200 text-xs font-semibold">{formatCompactNumber(ip.output_tokens)}</td>
                                             <td><RuleButtons ip={ip.client_ip} blocked={blocked} /></td>
                                         </tr>
                                     );

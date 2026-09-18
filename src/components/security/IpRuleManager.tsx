@@ -6,6 +6,7 @@ import { showToast } from '../common/ToastContainer';
 import { request as invoke } from '../../utils/request';
 import { useIpRuleList } from './useIpRuleList';
 import { isValidIpPattern, remainingTime } from '../../utils/ipFormat';
+import ClickableIp from './ClickableIp';
 import { EXPIRY_PRESETS, type IpBlacklistEntry, type RuleListType, type IpWhitelistEntry, type SecurityMonitorConfig } from '../../types/security';
 
 interface Props {
@@ -272,7 +273,13 @@ export const IpRuleManager: React.FC<Props> = ({ type, refreshKey }) => {
                             return (
                                 <div key={entry.ip_pattern} className={`bg-white dark:bg-base-100 border ${accent.border} rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow`}>
                                     <div className="flex items-start justify-between mb-2">
-                                        <h3 className={`font-mono font-bold break-all ${accent.ip}`}>{entry.ip_pattern}</h3>
+                                        <h3 className="break-all">
+                                            <ClickableIp
+                                                ip={entry.ip_pattern}
+                                                compact={false}
+                                                textClassName={`font-mono font-bold ${accent.ip}`}
+                                            />
+                                        </h3>
                                         <button
                                             onClick={() => setPendingDelete(entry.ip_pattern)}
                                             className="btn btn-ghost btn-xs text-red-500 shrink-0"

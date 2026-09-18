@@ -62,9 +62,18 @@ impl SystemIntegration for DesktopIntegration {
         }
 
         // 1. 先关闭外部正在运行的进程（无论是原生还是IDE，先安全关闭，避免文件或凭据冲突）
-        if process::is_antigravity_running(target_ide) {
-            process::close_antigravity(20, target_ide)?;
-        }
+        // close_antigravity 内部用 thread::sleep 轮询等待进程退出（最长数十秒），
+        // 是阻塞调用；连同进程探测一起放进阻塞线程池，避免钉死 tokio worker 导致 UI 冻结。
+        let ide_owned = target_ide.map(str::to_string);
+        tokio::task::spawn_blocking(move || {
+            let ide = ide_owned.as_deref();
+            if process::is_antigravity_running(ide) {
+                process::close_antigravity(20, ide)?;
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| format!("Failed to join close_antigravity task: {e}"))??;
 
         // 2. 智能决策：是否使用最新的系统 Keychain 凭据管理器方式存储 Token
         let mut is_ide = target_ide == Some("ide");

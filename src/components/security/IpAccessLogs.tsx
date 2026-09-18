@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, AlertTriangle, Trash2, ChevronDown, ChevronRight, Power, RefreshCw } from 'lucide-react';
+import { Search, AlertTriangle, Trash2, ChevronRight, Power, RefreshCw } from 'lucide-react';
 import { request as invoke } from '../../utils/request';
 import Pagination from '../common/Pagination';
 import ModalDialog from '../common/ModalDialog';
 import { showToast } from '../common/ToastContainer';
-import { describeIp, classifyIp, compactIp } from '../../utils/ipFormat';
+import { describeIp, classifyIp } from '../../utils/ipFormat';
+import ClickableIp from './ClickableIp';
+import { enrichIpListGeo } from '../../utils/ipThreatCache';
 import type { IpAccessLog, IpAccessLogResponse } from '../../types/security';
 
 interface Props {
@@ -26,6 +28,17 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [blockedOnly, setBlockedOnly] = useState(initialBlockedOnly);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [openedIds, setOpenedIds] = useState<Set<string>>(() => new Set());
+
+    const toggleExpand = useCallback((id: string) => {
+        setExpandedId(prev => (prev === id ? null : id));
+        setOpenedIds(prev => {
+            if (prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+        });
+    }, []);
     const [confirmClear, setConfirmClear] = useState(false);
     const [loggingEnabled, setLoggingEnabled] = useState<boolean | null>(null);
     const [enabling, setEnabling] = useState(false);
@@ -60,6 +73,14 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
             });
             setLogs(res.logs || []);
             setTotal(res.total || 0);
+
+            if (res.logs?.length) {
+                enrichIpListGeo(res.logs).then(({ changed, items }) => {
+                    if (changed) {
+                        setLogs(items);
+                    }
+                }).catch(() => {});
+            }
 
             // GeoIP 为后台异步补全：每个查询周期最多静默补刷一次，
             // 离线/限流导致仍缺归属地时不再重试（服务端失败缓存 1h），避免轮询。
@@ -206,14 +227,19 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
                         {logs.map(log => {
                             const desc = describeIp(log.client_ip, log.geo, t);
                             const open = expandedId === log.id;
+                            const isRendered = open || openedIds.has(log.id);
+
                             return (
                                 <React.Fragment key={log.id}>
                                     <tr
-                                        className={`hover:bg-gray-50 dark:hover:bg-base-200 cursor-pointer ${open ? 'bg-gray-50 dark:bg-base-200' : ''}`}
-                                        onClick={() => setExpandedId(open ? null : log.id)}
+                                        className={`hover:bg-gray-50 dark:hover:bg-base-200 cursor-pointer transition-colors duration-150 ${open ? 'bg-gray-50 dark:bg-base-200' : ''}`}
+                                        onClick={() => toggleExpand(log.id)}
                                     >
-                                        <td className="text-gray-400">
-                                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                        <td className="text-gray-400 w-8">
+                                            <ChevronRight
+                                                size={14}
+                                                className={`transition-transform duration-200 ease-out ${open ? 'rotate-90 text-blue-500 dark:text-blue-400' : ''}`}
+                                            />
                                         </td>
                                         <td>
                                             {log.blocked ? (
@@ -227,8 +253,14 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
                                             )}
                                         </td>
                                         <td>
-                                            <div className="font-mono font-medium leading-tight" title={desc.ip}>{compactIp(desc.ip)}{desc.isIpv6 && <span className="ml-1 text-[10px] text-gray-400">v6</span>}</div>
-                                            {desc.detail && <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[220px]" title={desc.detail}>{desc.detail}</div>}
+                                            <div className="leading-tight">
+                                                <ClickableIp ip={log.client_ip} showV6Badge />
+                                            </div>
+                                               {desc.detail && (
+                                                 <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[260px] mt-0.5">
+                                                     <span className="truncate">{desc.detail}</span>
+                                                 </div>
+                                             )}
                                         </td>
                                         <td className="font-medium text-blue-600 dark:text-blue-400">{log.username || '-'}</td>
                                         <td className="font-bold text-xs">{log.method || '-'}</td>
@@ -236,18 +268,40 @@ export const IpAccessLogs: React.FC<Props> = ({ initialBlockedOnly = false, refr
                                         <td className="text-right font-mono">{log.duration ? `${log.duration}ms` : '-'}</td>
                                         <td className="text-right text-xs text-gray-500">{new Date(log.timestamp * 1000).toLocaleString()}</td>
                                     </tr>
-                                    {open && (
-                                        <tr className="bg-gray-50 dark:bg-base-200">
-                                            <td />
-                                            <td colSpan={7} className="py-2">
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
-                                                    <div><span className="text-gray-400">{t('security.logs.user_agent')}: </span>{log.user_agent || '-'}</div>
-                                                    <div><span className="text-gray-400">{t('security.logs.reason')}: </span><span className="text-red-500">{log.block_reason || '-'}</span></div>
-                                                    <div className="md:col-span-2 break-all"><span className="text-gray-400">{t('security.logs.path')}: </span>{log.path || '-'}</div>
+                                    <tr className="border-none">
+                                        <td colSpan={8} className="p-0 border-none">
+                                            <div
+                                                className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                                                    open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                                                }`}
+                                            >
+                                                <div className="overflow-hidden">
+                                                    {isRendered && (
+                                                        <div className="py-2.5 px-4 bg-gray-50 dark:bg-base-200 border-b border-gray-100 dark:border-base-300">
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-gray-600 dark:text-gray-300 pl-8">
+                                                                <div>
+                                                                    <span className="text-gray-400">{t('security.logs.user_agent')}: </span>
+                                                                    <span className="font-mono text-gray-700 dark:text-gray-300">{log.user_agent || '-'}</span>
+                                                                </div>
+                                                                <div>
+                                                                    <span className="text-gray-400">{t('security.logs.reason')}: </span>
+                                                                    {log.block_reason ? (
+                                                                        <span className="text-red-500 font-medium">{log.block_reason}</span>
+                                                                    ) : (
+                                                                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">无 (正常放行)</span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="md:col-span-2 break-all">
+                                                                    <span className="text-gray-400">{t('security.logs.path')}: </span>
+                                                                    <span className="font-mono text-blue-600 dark:text-blue-400">{log.path || '-'}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            </td>
-                                        </tr>
-                                    )}
+                                            </div>
+                                        </td>
+                                    </tr>
                                 </React.Fragment>
                             );
                         })}

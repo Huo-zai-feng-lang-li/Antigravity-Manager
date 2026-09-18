@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
@@ -39,7 +39,10 @@ pub struct ProxyStats {
 
 pub struct ProxyMonitor {
     pub logs: RwLock<VecDeque<ProxyRequestLog>>,
-    pub stats: RwLock<ProxyStats>,
+    // 统计计数器：热路径每请求自增，用原子变量避免 RwLock 写锁竞争。
+    total_requests: AtomicU64,
+    success_count: AtomicU64,
+    error_count: AtomicU64,
     pub max_logs: usize,
     pub enabled: AtomicBool,
     app_handle: Option<tauri::AppHandle>,
@@ -146,7 +149,9 @@ impl ProxyMonitor {
 
         Self {
             logs: RwLock::new(VecDeque::with_capacity(max_logs)),
-            stats: RwLock::new(ProxyStats::default()),
+            total_requests: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
             max_logs,
             enabled: AtomicBool::new(false), // Default to disabled
             app_handle,
@@ -183,15 +188,12 @@ impl ProxyMonitor {
             return;
         }
         tracing::info!("[Monitor] Logging request: {} {}", log.method, log.url);
-        // Update stats
-        {
-            let mut stats = self.stats.write().await;
-            stats.total_requests += 1;
-            if log.status < 400 {
-                stats.success_count += 1;
-            } else {
-                stats.error_count += 1;
-            }
+        // Update stats（无锁原子计数，避免热路径写锁竞争）
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+        if log.status < 400 {
+            self.success_count.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.error_count.fetch_add(1, Ordering::Relaxed);
         }
 
         // Add log to memory
@@ -283,6 +285,16 @@ impl ProxyMonitor {
         }
     }
 
+    /// 读取内存计数器快照（DB 不可用时的 fallback）。
+    /// 三个计数器分别 load，统计展示场景无需严格一致快照。
+    fn memory_stats(&self) -> ProxyStats {
+        ProxyStats {
+            total_requests: self.total_requests.load(Ordering::Relaxed),
+            success_count: self.success_count.load(Ordering::Relaxed),
+            error_count: self.error_count.load(Ordering::Relaxed),
+        }
+    }
+
     pub async fn get_stats(&self) -> ProxyStats {
         let db_result = tokio::task::spawn_blocking(|| crate::modules::proxy_db::get_stats()).await;
 
@@ -290,11 +302,11 @@ impl ProxyMonitor {
             Ok(Ok(stats)) => stats,
             Ok(Err(e)) => {
                 tracing::error!("Failed to get stats from DB: {}", e);
-                self.stats.read().await.clone()
+                self.memory_stats()
             }
             Err(e) => {
                 tracing::error!("Spawn blocking failed for get_stats: {}", e);
-                self.stats.read().await.clone()
+                self.memory_stats()
             }
         }
     }
@@ -324,8 +336,9 @@ impl ProxyMonitor {
     pub async fn clear(&self) {
         let mut logs = self.logs.write().await;
         logs.clear();
-        let mut stats = self.stats.write().await;
-        *stats = ProxyStats::default();
+        self.total_requests.store(0, Ordering::Relaxed);
+        self.success_count.store(0, Ordering::Relaxed);
+        self.error_count.store(0, Ordering::Relaxed);
 
         let _ = tokio::task::spawn_blocking(|| {
             if let Err(e) = crate::modules::proxy_db::clear_logs() {

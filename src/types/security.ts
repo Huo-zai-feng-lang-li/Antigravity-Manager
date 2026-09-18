@@ -1,11 +1,15 @@
 // IP 管理 / 安全监控模块类型定义（字段名与后端 serde 输出保持一致：snake_case）
 
-/** IP 归属地信息 */
+/** IP 归属地与威胁画像信息 */
 export interface IpGeoInfo {
     country?: string;
     region?: string;
     city?: string;
     isp?: string;
+    scene?: string;
+    risk_score?: string;
+    risk_detail?: string;
+    sub_items?: string[];
 }
 
 /** IP 访问日志 */

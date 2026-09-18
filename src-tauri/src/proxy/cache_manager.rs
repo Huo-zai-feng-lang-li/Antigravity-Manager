@@ -20,7 +20,40 @@
 
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// 单层缓存的无锁计数器 (total, hits, misses)。
+/// 统计仅用于可观测性，不参与业务逻辑，Relaxed 序即可，无需锁。
+#[derive(Debug, Default)]
+struct LayerCounters {
+    total: AtomicU64,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl LayerCounters {
+    #[inline]
+    fn inc_total(&self) {
+        self.total.fetch_add(1, Ordering::Relaxed);
+    }
+    #[inline]
+    fn inc_hits(&self) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+    }
+    #[inline]
+    fn inc_misses(&self) {
+        self.misses.fetch_add(1, Ordering::Relaxed);
+    }
+    #[inline]
+    fn snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.total.load(Ordering::Relaxed),
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+        )
+    }
+}
 
 // ===== Layer Limits (following SignatureCache pattern) =====
 const SI_CACHE_LIMIT: usize = 200;
@@ -115,18 +148,18 @@ pub struct LayerStats {
 pub struct CacheManager {
     /// Layer 1: raw SI hash → sanitized text
     si_cache: DashMap<String, SiCacheEntry>,
-    /// Layer 1 统计
-    si_stats: std::sync::RwLock<(u64, u64, u64)>, // (total, hits, misses)
+    /// Layer 1 统计（无锁原子计数）
+    si_stats: LayerCounters,
 
     /// Layer 2: raw tools hash → processed tools JSON
     tools_cache: DashMap<String, ToolsCacheEntry>,
-    /// Layer 2 统计
-    tools_stats: std::sync::RwLock<(u64, u64, u64)>,
+    /// Layer 2 统计（无锁原子计数）
+    tools_stats: LayerCounters,
 
     /// Layer 3: combined hash → tracking entry
     prefix_tracker: DashMap<String, PrefixTrackingEntry>,
-    /// Layer 3 统计
-    prefix_stats: std::sync::RwLock<(u64, u64, u64)>,
+    /// Layer 3 统计（无锁原子计数）
+    prefix_stats: LayerCounters,
 }
 
 impl CacheManager {
@@ -134,11 +167,11 @@ impl CacheManager {
     pub fn new() -> Self {
         Self {
             si_cache: DashMap::new(),
-            si_stats: std::sync::RwLock::new((0, 0, 0)),
+            si_stats: LayerCounters::default(),
             tools_cache: DashMap::new(),
-            tools_stats: std::sync::RwLock::new((0, 0, 0)),
+            tools_stats: LayerCounters::default(),
             prefix_tracker: DashMap::new(),
-            prefix_stats: std::sync::RwLock::new((0, 0, 0)),
+            prefix_stats: LayerCounters::default(),
         }
     }
 
@@ -162,9 +195,7 @@ impl CacheManager {
     ///
     /// 返回 Some(sanitized_text) 如果缓存有效，否则 None
     pub fn lookup_si(&self, raw_hash: &str) -> Option<String> {
-        if let Ok(mut stats) = self.si_stats.write() {
-            stats.0 += 1; // total
-        }
+        self.si_stats.inc_total();
 
         let mut hit = false;
         let mut expired = false;
@@ -180,9 +211,7 @@ impl CacheManager {
         }
 
         if hit {
-            if let Ok(mut stats) = self.si_stats.write() {
-                stats.1 += 1; // hits
-            }
+            self.si_stats.inc_hits();
             let mut hit_count = 0;
             if let Some(mut e) = self.si_cache.get_mut(raw_hash) {
                 e.hit_count += 1;
@@ -200,9 +229,7 @@ impl CacheManager {
             self.si_cache.remove_if(raw_hash, |_, entry| {
                 Self::is_expired(entry.timestamp, LAYER_12_TTL)
             });
-            if let Ok(mut stats) = self.si_stats.write() {
-                stats.2 += 1; // misses
-            }
+            self.si_stats.inc_misses();
             tracing::debug!(
                 "[CacheManager:L1-SI] EXPIRED hash={}",
                 &raw_hash[..raw_hash.len().min(16)]
@@ -210,9 +237,7 @@ impl CacheManager {
             return None;
         }
 
-        if let Ok(mut stats) = self.si_stats.write() {
-            stats.2 += 1; // misses
-        }
+        self.si_stats.inc_misses();
         tracing::debug!(
             "[CacheManager:L1-SI] MISS hash={}",
             &raw_hash[..raw_hash.len().min(16)]
@@ -262,9 +287,7 @@ impl CacheManager {
     ///
     /// 返回 Some(tools_json_string) 如果缓存有效，否则 None
     pub fn lookup_tools(&self, raw_hash: &str) -> Option<String> {
-        if let Ok(mut stats) = self.tools_stats.write() {
-            stats.0 += 1;
-        }
+        self.tools_stats.inc_total();
 
         let mut hit = false;
         let mut expired = false;
@@ -280,9 +303,7 @@ impl CacheManager {
         }
 
         if hit {
-            if let Ok(mut stats) = self.tools_stats.write() {
-                stats.1 += 1;
-            }
+            self.tools_stats.inc_hits();
             if let Some(mut e) = self.tools_cache.get_mut(raw_hash) {
                 e.hit_count += 1;
             }
@@ -297,9 +318,7 @@ impl CacheManager {
             self.tools_cache.remove_if(raw_hash, |_, entry| {
                 Self::is_expired(entry.timestamp, LAYER_12_TTL)
             });
-            if let Ok(mut stats) = self.tools_stats.write() {
-                stats.2 += 1;
-            }
+            self.tools_stats.inc_misses();
             tracing::debug!(
                 "[CacheManager:L2-Tools] EXPIRED hash={}",
                 &raw_hash[..raw_hash.len().min(16)]
@@ -307,9 +326,7 @@ impl CacheManager {
             return None;
         }
 
-        if let Ok(mut stats) = self.tools_stats.write() {
-            stats.2 += 1;
-        }
+        self.tools_stats.inc_misses();
         tracing::debug!(
             "[CacheManager:L2-Tools] MISS hash={}",
             &raw_hash[..raw_hash.len().min(16)]
@@ -373,9 +390,7 @@ impl CacheManager {
     ///
     /// 返回 Some(cache_name) 如果存在有效缓存，否则 None
     pub fn lookup_prefix(&self, hash: &str) -> Option<String> {
-        if let Ok(mut stats) = self.prefix_stats.write() {
-            stats.0 += 1;
-        }
+        self.prefix_stats.inc_total();
 
         let mut hit = false;
         let mut expired = false;
@@ -391,9 +406,7 @@ impl CacheManager {
         }
 
         if hit {
-            if let Ok(mut stats) = self.prefix_stats.write() {
-                stats.1 += 1;
-            }
+            self.prefix_stats.inc_hits();
             if let Some(ref name) = cache_name {
                 tracing::debug!(
                     "[CacheManager:L3-Prefix] HIT hash={} cache_name={}",
@@ -407,9 +420,7 @@ impl CacheManager {
         if expired {
             self.prefix_tracker
                 .remove_if(hash, |_, entry| entry.expires_at <= Instant::now());
-            if let Ok(mut stats) = self.prefix_stats.write() {
-                stats.2 += 1;
-            }
+            self.prefix_stats.inc_misses();
             tracing::debug!(
                 "[CacheManager:L3-Prefix] EXPIRED hash={}",
                 &hash[..hash.len().min(16)]
@@ -417,9 +428,7 @@ impl CacheManager {
             return None;
         }
 
-        if let Ok(mut stats) = self.prefix_stats.write() {
-            stats.2 += 1;
-        }
+        self.prefix_stats.inc_misses();
         tracing::debug!(
             "[CacheManager:L3-Prefix] MISS hash={}",
             &hash[..hash.len().min(16)]
@@ -519,9 +528,9 @@ impl CacheManager {
 
     /// 获取分层统计
     pub fn get_layer_stats(&self) -> LayerStats {
-        let si = self.si_stats.read().unwrap();
-        let tools = self.tools_stats.read().unwrap();
-        let prefix = self.prefix_stats.read().unwrap();
+        let si = self.si_stats.snapshot();
+        let tools = self.tools_stats.snapshot();
+        let prefix = self.prefix_stats.snapshot();
 
         let total_implicit = self
             .prefix_tracker
@@ -582,14 +591,10 @@ impl CacheManager {
         self.si_cache.clear();
         self.tools_cache.clear();
         self.prefix_tracker.clear();
-        if let Ok(mut s) = self.si_stats.write() {
-            *s = (0, 0, 0);
-        }
-        if let Ok(mut s) = self.tools_stats.write() {
-            *s = (0, 0, 0);
-        }
-        if let Ok(mut s) = self.prefix_stats.write() {
-            *s = (0, 0, 0);
+        for c in [&self.si_stats, &self.tools_stats, &self.prefix_stats] {
+            c.total.store(0, Ordering::Relaxed);
+            c.hits.store(0, Ordering::Relaxed);
+            c.misses.store(0, Ordering::Relaxed);
         }
         tracing::info!("[CacheManager] All layers cleared");
     }

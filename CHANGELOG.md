@@ -3,6 +3,22 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.32 (2026-09-18)**:
+        -   **[桌面端账号切换阻塞消减]**:
+            -   在 `integration.rs` 中将 `close_antigravity` 与进程状态检查迁移至 `tokio::task::spawn_blocking`，彻底避免主工作线程被休眠轮询阻塞，消除了账号切换时的 UI 假死现象。
+        -   **[高并发热路径无锁化与原子统计]**:
+            -   `cache_manager.rs`：三层缓存命中与失效统计由 `RwLock` 重构为基于 `AtomicU64` 的无锁计数器 `LayerCounters`。
+            -   `monitor.rs`：请求监控总数、成功数与错误数计数迁移至原子变量，消除了代理热路径高并发下的写锁竞争。
+        -   **[安全监控 UI 交互重构与百度 IP 画像]**:
+            -   `IpThreatCard.tsx`：引入 SVG 动态渐变安全仪表盘与 2x2 威胁矩阵（风险类型/活跃状态/地理位置/自治域系统），支持加载骨架屏与深色模式自适应。
+            -   `IpRiskBadge.tsx` & `ClickableIp.tsx`：提供可交互 IP 标签与点击唤起画像卡片，全面接入 IP 访问日志与统计排行。
+        -   **[三大核心边界缺陷闭环修复]**:
+            -   `geoip.rs` & `security_db.rs`：移除强制 `risk_score` 刷新限制，确保海外及无风险评分 IP 正常缓存，阻断死循环无限重查，消除接口被封禁风险。
+            -   `proxy_db.rs`：冷启动会话标题回填增加 SQL 级关键词初筛过滤，消除千条大报文无意义扫描与磁盘 I/O 饱和。
+            -   `ipThreatCache.ts`：前端引入 500 条 LRU 淘汰、Single-Flight 单飞请求去重及 `sessionStorage` 节流持久化，杜绝并发风暴与存储溢出。
+        -   **[发版版本一致性强校验门禁]**:
+            -   新增 `scripts/check-version.mjs`，CI 与 Release 工作流接入自动门禁，确保 `package.json`、`Cargo.toml`、`tauri.conf.json`、Release Tag 以及双语 Changelog 版本严格对齐。
+            -   新增 `test_cargo_version_matches_tauri_conf` 保护性单元测试，防止未来配置漂移。
     *   **v4.8.31 (2026-09-17)**:
         -   **[详情弹窗加入场过渡动画（GPU 合成层，不卡）]**:
             -   **方案**: 遮罩层 `opacity` 淡入（200ms），弹窗 `opacity + scale(0.95→1)` 淡入缩放，全部走 GPU 合成层（transform/opacity），不触发布局重排。

@@ -781,6 +781,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cargo_version_matches_tauri_conf() {
+        // 防护网：更新检测的“当前版本”取自 CARGO_PKG_VERSION（Cargo.toml），
+        // 而界面版本取自 tauri.conf.json。二者一旦漂移（发版漏改 Cargo.toml），
+        // 就会出现“已是最新却提示发现新版本”的误报。此测试在版本不一致时直接失败。
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json"))
+                .expect("tauri.conf.json must be valid JSON");
+        let tauri_version = conf["version"]
+            .as_str()
+            .expect("tauri.conf.json must contain a version string")
+            .trim_start_matches('v');
+        assert_eq!(
+            env!("CARGO_PKG_VERSION"),
+            tauri_version,
+            "Cargo.toml 与 tauri.conf.json 版本不一致；发版时必须同步，否则更新检测会误报"
+        );
+    }
+
+    #[test]
     fn test_compare_versions() {
         assert!(compare_versions("3.3.36", "3.3.35"));
         assert!(compare_versions("3.4.0", "3.3.35"));

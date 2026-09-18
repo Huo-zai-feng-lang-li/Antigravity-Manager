@@ -940,6 +940,7 @@ impl AxumServer {
             .route("/security/logs/clear", post(admin_clear_ip_access_logs))
             .route("/security/stats", get(admin_get_ip_stats))
             .route("/security/token-stats", get(admin_get_ip_token_stats)) // For IP Token usage
+            .route("/security/ip-geo", get(admin_get_ip_geo))
             .route("/security/whoami", get(admin_security_whoami))
             .route(
                 "/security/blacklist",
@@ -3720,6 +3721,20 @@ async fn admin_get_ip_blacklist() -> Result<impl IntoResponse, (StatusCode, Json
         )
     })?;
     Ok(Json(list))
+}
+
+#[derive(Deserialize)]
+struct IpGeoQuery {
+    ip: String,
+}
+
+async fn admin_get_ip_geo(
+    Query(query): Query<IpGeoQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let geo = crate::modules::geoip::query_single_ip(&query.ip)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e })))?;
+    Ok(Json(geo))
 }
 
 #[derive(Deserialize)]

@@ -50,6 +50,12 @@ pub struct IpGeoInfo {
     pub city: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_score: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_detail: Option<String>,
 }
 
 /// IP 黑名单条目
@@ -229,14 +235,23 @@ pub fn init_db() -> Result<(), String> {
     // Migration: Add username column to ip_access_logs
     let _ = conn.execute("ALTER TABLE ip_access_logs ADD COLUMN username TEXT", []);
 
-    // Migration v1: GeoIP 主数据源切换为百度，旧 ip-api 缓存（国内 IPv6 归属地
-    // 可能错误，如把新疆联通基站定位到北京）全部作废，下次访问时自动重新查询。
+    // Migration: Add scene, risk_score, risk_detail columns to ip_geo
+    let _ = conn.execute("ALTER TABLE ip_geo ADD COLUMN scene TEXT", []);
+    let _ = conn.execute("ALTER TABLE ip_geo ADD COLUMN risk_score TEXT", []);
+    let _ = conn.execute("ALTER TABLE ip_geo ADD COLUMN risk_detail TEXT", []);
+
+    // Migration v1: GeoIP 主数据源切换为百度，旧 ip-api 缓存全部作废。
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap_or(0);
     if user_version < 1 {
         let _ = conn.execute("DELETE FROM ip_geo", []);
         let _ = conn.execute("PRAGMA user_version = 1", []);
+    }
+    // Migration v2: 升级百度画像解析（支持 subItems、risk_score），清理缺失 risk_score 的旧记录
+    if user_version < 2 {
+        let _ = conn.execute("DELETE FROM ip_geo WHERE risk_score IS NULL", []);
+        let _ = conn.execute("PRAGMA user_version = 2", []);
     }
 
     Ok(())
@@ -729,23 +744,27 @@ const GEO_RETRY_SECONDS: i64 = 3600;
 pub fn upsert_ip_geo(ip: &str, geo: Option<&IpGeoInfo>) -> Result<(), String> {
     let conn = connect_db()?;
     let now = chrono::Utc::now().timestamp();
-    let (success, country, region, city, isp) = match geo {
+    let (success, country, region, city, isp, scene, risk_score, risk_detail) = match geo {
         Some(info) => (
             1_i64,
             info.country.clone(),
             info.region.clone(),
             info.city.clone(),
             info.isp.clone(),
+            info.scene.clone(),
+            info.risk_score.clone(),
+            info.risk_detail.clone(),
         ),
-        None => (0, None, None, None, None),
+        None => (0, None, None, None, None, None, None, None),
     };
     conn.execute(
-        "INSERT INTO ip_geo (ip, country, region, city, isp, success, queried_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO ip_geo (ip, country, region, city, isp, scene, risk_score, risk_detail, success, queried_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(ip) DO UPDATE SET
             country=excluded.country, region=excluded.region, city=excluded.city,
-            isp=excluded.isp, success=excluded.success, queried_at=excluded.queried_at",
-        params![ip, country, region, city, isp, success, now],
+            isp=excluded.isp, scene=excluded.scene, risk_score=excluded.risk_score,
+            risk_detail=excluded.risk_detail, success=excluded.success, queried_at=excluded.queried_at",
+        params![ip, country, region, city, isp, scene, risk_score, risk_detail, success, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -763,7 +782,7 @@ fn get_geo_map_with_connection(
     let fresh_after = chrono::Utc::now().timestamp() - GEO_TTL_SECONDS;
     let placeholders = ips.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT ip, country, region, city, isp FROM ip_geo
+        "SELECT ip, country, region, city, isp, scene, risk_score, risk_detail FROM ip_geo
          WHERE success = 1 AND queried_at >= ?1 AND ip IN ({})",
         placeholders
     );
@@ -781,6 +800,9 @@ fn get_geo_map_with_connection(
                     region: row.get(2)?,
                     city: row.get(3)?,
                     isp: row.get(4)?,
+                    scene: row.get(5)?,
+                    risk_score: row.get(6)?,
+                    risk_detail: row.get(7)?,
                 },
             ))
         })
@@ -814,11 +836,11 @@ fn get_stale_geo_ips_with_connection(
 
     // 单条 IN 查询取全部缓存状态，避免逐 IP query_row 的 N+1。
     let placeholders = unique.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT ip, success, queried_at FROM ip_geo WHERE ip IN ({placeholders})");
+    let sql = format!("SELECT ip, success, queried_at, risk_score FROM ip_geo WHERE ip IN ({placeholders})");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let found: HashMap<String, (i64, i64)> = stmt
+    let found: HashMap<String, (i64, i64, Option<String>)> = stmt
         .query_map(params_from_iter(unique.iter().copied()), |row| {
-            Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
+            Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
         })
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -826,13 +848,17 @@ fn get_stale_geo_ips_with_connection(
         .into_iter()
         .collect();
 
+    let fresh_after = chrono::Utc::now().timestamp() - GEO_TTL_SECONDS;
     let retry_after = chrono::Utc::now().timestamp() - GEO_RETRY_SECONDS;
     let mut stale = Vec::new();
     for ip in unique {
         let needs_query = match found.get(ip) {
             None => true,
-            Some((1, _)) => false, // 成功记录由 TTL 缓存判定，未过期不查
-            Some((0, queried_at)) => *queried_at < retry_after,
+            Some((1, queried_at, _)) => {
+                // 已过 30 天 TTL 则需重新查询；有效期内直接复用，避免对海外/无评分正常 IP 死循环重查
+                *queried_at < fresh_after
+            }
+            Some((0, queried_at, _)) => *queried_at < retry_after,
             _ => true,
         };
         if needs_query {

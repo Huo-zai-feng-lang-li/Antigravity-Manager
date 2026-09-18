@@ -3,6 +3,58 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.32 (2026-09-18)**:
+        -   **[Desktop Account Switching Blocking Mitigation]**:
+            -   Offloaded `close_antigravity` and process checks in `integration.rs` to `tokio::task::spawn_blocking`, preventing synchronous sleep polling from hanging Tokio worker threads and eliminating UI freezes.
+        -   **[Lock-Free Atomic Counters on Hot Paths]**:
+            -   `cache_manager.rs`: Refactored three-layer cache statistics from `RwLock` to `LayerCounters` utilizing `AtomicU64`.
+            -   `monitor.rs`: Migrated total, success, and error request counters to atomic variables, completely eliminating write-lock contention under high proxy traffic.
+        -   **[Security Monitor UI & Baidu IP Threat Portrait]**:
+            -   `IpThreatCard.tsx`: Introduced dynamic SVG gradient gauge and 2x2 threat matrix (risk type, activity status, geolocation, ASN), supporting skeleton loaders and dark mode.
+            -   `IpRiskBadge.tsx` & `ClickableIp.tsx`: Provided interactive risk badges with click-to-view portrait cards across access logs and statistics tables.
+        -   **[Three Core Boundary Fixes & Closed-Loop Hardening]**:
+            -   `geoip.rs` & `security_db.rs`: Removed mandatory `risk_score` cache validation to ensure overseas and unrated IPs are cached properly within 30-day TTL, breaking infinite external lookup loops and preventing API bans.
+            -   `proxy_db.rs`: Added SQL-level keyword pre-filtering for cold startup session title backfilling, eliminating redundant scanning of large payloads and avoiding disk I/O starvation.
+            -   `ipThreatCache.ts`: Implemented 500-item LRU cache, Single-Flight in-flight request deduplication, and debounced `sessionStorage` persistence to prevent concurrency storms and storage quota exhaustion.
+        -   **[Release Version Consistency Gate]**:
+            -   Added `scripts/check-version.mjs` and enforced gating across CI and Release pipelines to guarantee synchronization between `package.json`, `Cargo.toml`, `tauri.conf.json`, Git Tags, and bilingual changelogs.
+            -   Added `test_cargo_version_matches_tauri_conf` unit test in Rust to prevent configuration drift.
+    *   **v4.8.31 (2026-09-17)**:
+        -   **[Details Modal Entry Transition Animation (GPU Composited Layer, Smooth)]**:
+            -   **Design**: Mask layer `opacity` fade-in (200ms), dialog card `opacity + scale(0.95→1)` fade & zoom, running exclusively on GPU composited layers (`transform` & `opacity`) without triggering layout reflow.
+            -   **Performance**: Avoided `backdrop-filter` and smooth scrolling animations to eliminate WebView2 real-time blur and long-content scroll stutter.
+    *   **v4.8.30 (2026-09-17)**:
+        -   **[Fix Details Modal Lag: Removed backdrop-blur + Instant Scrolling]**:
+            -   **Root Cause**: Real-time blur from `backdrop-blur-sm` over large scrollable tables caused heavy GPU overhead in WebView2; smooth scrolling also blocked the browser thread on large payloads.
+            -   **Fix**: Removed `backdrop-blur-sm`, lowered dialog shadow from `shadow-2xl` to `shadow-xl`, and reverted automatic positioning from smooth scrolling to instant `scrollTop`.
+    *   **v4.8.29 (2026-09-17)**:
+        -   **[Details Modal Smooth Scrolling Transition]**:
+            -   **Change**: Transitioned auto-scrolling to browser-native `scrollTo({ top, behavior: 'smooth' })`, powered by the browser compositor thread.
+            -   **Performance**: Historical messages collapsed by default (`isHistoryOpen`) to avoid rendering massive DOM nodes upfront.
+    *   **v4.8.28 (2026-09-17)**:
+        -   **[Traffic Log Details Drawer Auto-Scroll to Conversation View]**:
+            -   **Issue**: Opening details modal defaulted to the top metadata section (timestamps, model, tokens), requiring manual scrolling to reach the conversation.
+            -   **Fix**: Added refs to scroll container and tab header, automatically scrolling to tab offset with a 16px buffer via `requestAnimationFrame` upon opening.
+    *   **v4.8.27 (2026-09-17)**:
+        -   **[Bugfix: IpStatistics onFocusChanged Listener Leak]**:
+            -   **Issue**: In v4.8.26, dynamic import of Tauri modules could leave `unlistenFocus` unassigned if the component re-rendered or unmounted prematurely, leaking event listeners.
+            -   **Fix**: Switched to `focusUnlistenRef` for listener handle management with guaranteed unlisten cleanup, and added `isTauri()` guards to skip unnecessary module loading in web mode.
+    *   **v4.8.26 (2026-09-17)**:
+        -   **[Global Polling Power Saving: Blur Pause & Timeout Leak Fix]**:
+            -   **ApiProxy / IpStatistics Pages**: Polling pauses automatically when the window is blurred or minimized, resuming immediately upon focus.
+            -   **ProxyMonitor**: Replaced `Promise.race` with a dedicated `withTimeout` helper that immediately cleans up timer handles, resolving timer resource accumulation.
+    *   **v4.8.25 (2026-09-17)**:
+        -   **[Traffic Log Tab Switcher Polish & Polling Optimization]**:
+            -   **Tab Styling**: Upgraded tab switcher to clean Tailwind styling with refined selected states and hover feedback.
+            -   **Polling Efficiency**: `loadData` now accepts `syncConfig`, skipping redundant `load_config` and `set_proxy_monitor_enabled` IPC calls during recurring background polling.
+    *   **v4.8.24 (2026-09-17)**:
+        -   **[Traffic Log Polling Auto-Pause on Inactive Windows]**:
+            -   **Issue**: Background polling previously ran unconditionally every 5 seconds, causing redundant DB queries and CPU wakeups even when minimized.
+            -   **Fix**: Added visibility and window focus listeners to halt interval execution when inactive, plus `loadingRef` protection against state capture races.
+    *   **v4.8.23 (2026-09-17)**:
+        -   **[Traffic Log Multimodal Image Preview Fix]**:
+            -   **Root Cause**: Backend image detection used raw `data:image/` matching, failing on JSON-escaped slashes `data:image\/jpeg` and triggering unintended truncation.
+            -   **Fix**: Normalized image detection prefixes to accommodate both standard and escaped slashes, preserving payloads <= 10MB intact.
     *   **v4.8.22 (2026-09-17)**:
         -   **[Custom block message now reaches the client on streaming endpoints]**:
             -   Blocking a streaming request (/v1/responses, /v1/chat/completions) previously returned 403 + JSON; the streaming client did not read that body and fell back to "Invalid API key", hiding the custom block message. Streaming requests now get 200 + an SSE error event carrying the custom message; non-streaming requests still get 403 JSON.

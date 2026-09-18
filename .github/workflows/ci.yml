@@ -32,6 +32,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Check version consistency
+        run: npm run check-version
+
       - name: TypeScript check
         run: npx tsc --noEmit
 

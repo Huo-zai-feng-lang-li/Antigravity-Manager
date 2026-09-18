@@ -704,6 +704,7 @@ pub fn run() {
             commands::security::get_ip_access_logs,
             commands::security::get_ip_stats,
             commands::security::get_ip_token_stats,
+            commands::security::query_ip_geo,
             commands::security::clear_ip_access_logs,
             commands::security::get_my_ip,
             commands::security::get_ip_blacklist,

@@ -170,18 +170,25 @@ fn truncate_body(body: &str) -> String {
 fn looks_like_title_request(request_body: &str) -> bool {
     let r = request_body.to_lowercase();
     const KEYWORDS: &[&str] = &[
-        "generate a short title",
-        "task category",
-        "write a 5-10 word title",
-        "respond with the title",
-        "generate a title for",
+        "short title",
+        "with the title",
+        "into a title",
+        "as a title",
+        "generate a title",
         "create a brief title",
+        "write a 5-10 word title",
         "title for the conversation",
         "conversation title",
-        "generate the title",
+        "chat title",
+        "task category",
         "containing a title",
         "生成标题",
+        "起个标题",
+        "起一个标题",
+        "对话标题",
+        "作为标题",
         "为对话起个标题",
+        "概括为标题",
     ];
     KEYWORDS.iter().any(|k| r.contains(k))
 }
@@ -215,8 +222,115 @@ fn find_title_in_text(text: &str) -> Option<String> {
     }
 }
 
+/// 从纯文本或混合文本中提取并清洗会话标题（防误判守卫）。
+fn clean_title_from_text(text: &str) -> Option<String> {
+    // 1. 优先尝试从 JSON 中提纯 {"title": "..."}（兼容 Minis 等客户端格式）
+    if let Some(t) = find_title_in_text(text) {
+        return Some(t);
+    }
+
+    // 2. 纯文本兜底（覆盖 RikkaHub、ai-sdk、OpenAI/JS 等直接输出纯文本标题的客户端）
+    let raw = text.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    // 严格单行守卫：标题绝不包含换行符（彻底杜绝多行普通对话回复或多选项）
+    if raw.contains('\n') || raw.contains('\r') {
+        return None;
+    }
+
+    // 去除包裹符号（首尾引号、书名号、反引号、方括号等）
+    let mut clean = raw
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '《' | '》' | '【' | '】' | '[' | ']' | '(' | ')'
+            )
+        })
+        .trim();
+
+    // 去除常见前缀（如 "Title: ", "标题: "）
+    for prefix in &["title:", "title：", "标题:", "标题："] {
+        if clean.to_lowercase().starts_with(prefix) {
+            clean = clean[prefix.len()..].trim();
+            clean = clean
+                .trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '《' | '》'
+                    )
+                })
+                .trim();
+            break;
+        }
+    }
+
+    if clean.is_empty() {
+        return None;
+    }
+
+    // 严格长度守卫：字符数限制在 1..=30 之间
+    let char_count = clean.chars().count();
+    if !(1..=30).contains(&char_count) {
+        return None;
+    }
+
+    // 排除常见拒答、客套或多选编号
+    let lower = clean.to_lowercase();
+    if lower.starts_with("sorry")
+        || lower.starts_with("i am sorry")
+        || lower.starts_with("as an ai")
+        || clean.starts_with("抱歉")
+        || clean.starts_with("对不起")
+        || clean.starts_with("1.")
+        || clean.starts_with("1、")
+        || clean.starts_with("- ")
+    {
+        return None;
+    }
+
+    Some(clean.to_string())
+}
+
+/// 从响应 JSON 中提取文本正文（兼容 Chat/Completion/Responses/Anthropic/聚合流）
+fn extract_response_content(v: &serde_json::Value) -> Option<&str> {
+    // 1. 标准 OpenAI Chat / Completion
+    if let Some(c) = v.pointer("/choices/0/message/content").and_then(|x| x.as_str()) {
+        return Some(c);
+    }
+    if let Some(c) = v.pointer("/choices/0/text").and_then(|x| x.as_str()) {
+        return Some(c);
+    }
+    // 2. 代理聚合后落库格式 或 顶层 content
+    if let Some(c) = v.get("content").and_then(|x| x.as_str()) {
+        return Some(c);
+    }
+    if let Some(c) = v.get("output_text").and_then(|x| x.as_str()) {
+        return Some(c);
+    }
+    // 3. Anthropic Messages API
+    if let Some(c) = v.pointer("/content/0/text").and_then(|x| x.as_str()) {
+        return Some(c);
+    }
+    // 4. OpenAI Responses API (/v1/responses): output: [ {type: "message", content: [{type: "output_text", text: "..."}]} ]
+    if let Some(outputs) = v.get("output").and_then(|o| o.as_array()) {
+        for out in outputs {
+            if out.get("type").and_then(|t| t.as_str()) == Some("message") {
+                if let Some(contents) = out.get("content").and_then(|c| c.as_array()) {
+                    for item in contents {
+                        if let Some(txt) = item.get("text").and_then(|t| t.as_str()) {
+                            return Some(txt);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 从标题生成请求的响应里提取会话标题。
-/// 顶层 {title,category} 直接采信；content/output_text 内嵌 JSON 仅在请求像标题生成时采信。
 fn extract_session_title(request_body: &str, response_body: &str) -> Option<String> {
     if request_body.is_empty() || response_body.is_empty() {
         return None;
@@ -225,7 +339,7 @@ fn extract_session_title(request_body: &str, response_body: &str) -> Option<Stri
         Ok(v) => v,
         Err(_) => {
             return if looks_like_title_request(request_body) {
-                find_title_in_text(response_body)
+                clean_title_from_text(response_body)
             } else {
                 None
             };
@@ -243,13 +357,9 @@ fn extract_session_title(request_body: &str, response_body: &str) -> Option<Stri
     if !looks_like_title_request(request_body) {
         return None;
     }
-    let content = v
-        .pointer("/choices/0/message/content")
-        .or_else(|| v.pointer("/choices/0/text"))
-        .or_else(|| v.get("output_text"))
-        .or_else(|| v.get("content"))
-        .and_then(|x| x.as_str());
-    content.and_then(find_title_in_text)
+
+    let content = extract_response_content(&v);
+    content.and_then(clean_title_from_text)
 }
 
 /// 回填历史日志的会话标题。
@@ -257,12 +367,18 @@ fn backfill_session_titles(conn: &rusqlite::Connection) {
     let rows: Vec<(String, Option<String>, Option<String>)> = {
         let mut stmt = match conn.prepare(
             "SELECT id, request_body, response_body FROM request_logs 
-             WHERE session_title IS NULL AND response_body LIKE '%\"title\"%' LIMIT 1000",
+             WHERE session_title IS NULL 
+               AND (
+                   request_body LIKE '%title%' 
+                   OR request_body LIKE '%标题%'
+                   OR response_body LIKE '%\"title\"%'
+               )
+             LIMIT 500",
         ) {
             Ok(s) => s,
             Err(_) => return,
         };
-        // 先取候选行（session_title 为空的），再在 Rust 侧按关键词/JSON 精确判断
+        // 先取候选行（session_title 为空的），再在 Rust 侧按关键词/守卫精确判断
         let iter = match stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
         }) {
@@ -866,6 +982,50 @@ mod tests {
     fn test_extract_title_not_false_positive_on_normal_chat() {
         let req = "帮我写个排序算法";
         let resp = r#"{"choices":[{"message":{"content":"好的，这是快速排序..."}}]}"#;
+        assert_eq!(extract_session_title(req, resp), None);
+    }
+
+    #[test]
+    fn test_extract_title_from_responses_api_plain_text() {
+        // RikkaHub 等客户端走 /v1/responses，output 包含 reasoning 和 message，纯文本标题
+        let req = "You need to summarize the conversation between user and assistant into a short title. Reply directly with the title.";
+        let resp = r#"{
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "content": [{"type": "output_text", "text": "初次见面"}]}
+            ]
+        }"#;
+        assert_eq!(
+            extract_session_title(req, resp),
+            Some("初次见面".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_title_strip_quotes_and_prefix() {
+        let req = "generate a short title for conversation";
+        let resp = r#"{"choices":[{"message":{"content":"\"React 项目配置\""}}]}"#;
+        assert_eq!(
+            extract_session_title(req, resp),
+            Some("React 项目配置".to_string())
+        );
+
+        let resp2 = r#"{"choices":[{"message":{"content":"标题：《数据分析流程》"}}]}"#;
+        assert_eq!(
+            extract_session_title(req, resp2),
+            Some("数据分析流程".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_title_reject_multiline_suggestion() {
+        // RikkaHub 快捷建议虽然可能带有些许关键词，但多行直接被单行守卫拦截
+        let req = "summarize into short title";
+        let resp = r#"{
+            "output": [
+                {"type": "message", "content": [{"type": "text", "text": "帮我写个代码\n你会什么编程语言\n帮我逆向个软件"}]}
+            ]
+        }"#;
         assert_eq!(extract_session_title(req, resp), None);
     }
 

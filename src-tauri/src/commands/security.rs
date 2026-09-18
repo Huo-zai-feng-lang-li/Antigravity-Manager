@@ -172,6 +172,12 @@ pub async fn clear_ip_access_logs() -> Result<(), String> {
     security_db::clear_ip_access_logs()
 }
 
+/// 实时查询单个 IP 的归属地及威胁画像（优先读库，缺失时查百度并落库 SQLite）
+#[tauri::command]
+pub async fn query_ip_geo(ip: String) -> Result<Option<security_db::IpGeoInfo>, String> {
+    crate::modules::geoip::query_single_ip(&ip).await
+}
+
 /// 查询调用方（本机/当前浏览器）在服务端视角的 IP，用于白名单防自锁。
 #[tauri::command]
 pub async fn get_my_ip() -> Result<WhoAmIResponse, String> {

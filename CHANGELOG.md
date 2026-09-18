@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.25 (2026-09-17)**:
+        -   **[流量日志 Tab 切换器美化 + 轮询省资源]**:
+            -   **Tab 美化**: 两个 Tab 按钮从 daisyUI `btn btn-xs` 改为纯 Tailwind `px-3 py-1.5`，按钮更宽、间距更明确；选中态 `shadow-sm` 更精致，未选中态 hover 有浅灰背景反馈。
+            -   **轮询省资源**: `loadData` 新增 `syncConfig` 参数，轮询/恢复活跃时跳过 `load_config` + `set_proxy_monitor_enabled` 两次 invoke（此前每 5s 多读一次全量配置）。
     *   **v4.8.24 (2026-09-17)**:
         -   **[流量日志轮询极致省电：页面失焦/最小化时自动暂停]**:
             -   **问题**: v4.8.20 引入的 5 秒轮询此前在组件挂载后无条件运行，即使窗口最小化、用户切到其他应用或浏览器标签页不可见，仍每 5 秒执行 4 次数据库查询（load_config / count / logs / stats），后台空转浪费 CPU 与电量。

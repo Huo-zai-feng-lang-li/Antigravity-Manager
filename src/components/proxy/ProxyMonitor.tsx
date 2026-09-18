@@ -203,7 +203,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         return Array.from(emailSet).sort();
     }, [logs, accounts]);
 
-    const loadData = async (page = 1, searchFilter = filter, accountEmailFilter = accountFilter) => {
+    const loadData = async (page = 1, searchFilter = filter, accountEmailFilter = accountFilter, syncConfig = true) => {
         if (loadingRef.current) return;
         loadingRef.current = true;
         setLoading(true);
@@ -214,14 +214,17 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 setTimeout(() => reject(new Error('Request timeout')), 10000)
             );
 
-            const config = await Promise.race([
-                invoke<AppConfig>('load_config'),
-                timeoutPromise
-            ]) as AppConfig;
+            // config 同步只在首次加载/用户操作时执行；轮询时跳过，避免每 5s 多读一次全量配置
+            if (syncConfig) {
+                const config = await Promise.race([
+                    invoke<AppConfig>('load_config'),
+                    timeoutPromise
+                ]) as AppConfig;
 
-            if (config && config.proxy) {
-                setIsLoggingEnabled(config.proxy.enable_logging);
-                await invoke('set_proxy_monitor_enabled', { enabled: config.proxy.enable_logging });
+                if (config && config.proxy) {
+                    setIsLoggingEnabled(config.proxy.enable_logging);
+                    await invoke('set_proxy_monitor_enabled', { enabled: config.proxy.enable_logging });
+                }
             }
 
             const errorsOnly = searchFilter === '__ERROR__';
@@ -325,7 +328,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             if (pollInterval || !isMountedRef.current) return;
             pollInterval = window.setInterval(() => {
                 if (isMountedRef.current && !loadingRef.current) {
-                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current, false);
                 }
             }, 5000);
         };
@@ -343,7 +346,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             const active = isPageVisible && isWindowFocused;
             if (active) {
                 if (!loadingRef.current) {
-                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current, false);
                 }
                 startPolling();
             } else {
@@ -735,14 +738,14 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
                             {/* View Switcher Tabs */}
                             <div className="flex items-center justify-between border-b border-gray-200 dark:border-base-300 pb-2">
-                                <div className="flex items-center gap-1.5 p-1 bg-gray-100 dark:bg-base-200 rounded-lg">
+                                <div className="flex items-center gap-1 p-1 bg-gray-100 dark:bg-base-200 rounded-lg">
                                     <button
                                         type="button"
                                         onClick={() => setViewMode('conversation')}
-                                        className={`btn btn-xs rounded-md border-none transition-all gap-1.5 ${
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                                             viewMode === 'conversation'
-                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs font-bold'
-                                                : 'bg-transparent text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm font-semibold'
+                                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-base-300'
                                         }`}
                                     >
                                         <MessageSquare size={13} />
@@ -751,10 +754,10 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     <button
                                         type="button"
                                         onClick={() => setViewMode('raw')}
-                                        className={`btn btn-xs rounded-md border-none transition-all gap-1.5 ${
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                                             viewMode === 'raw'
-                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs font-bold'
-                                                : 'bg-transparent text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                                                ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm font-semibold'
+                                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-base-300'
                                         }`}
                                     >
                                         <Code2 size={13} />
@@ -768,7 +771,6 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             </div>
 
                             {/* View Content */}
-                            <div className="mt-4">
                             {viewMode === 'conversation' && parsedConversation ? (
                                 <ConversationView
                                     parsed={parsedConversation}
@@ -846,7 +848,6 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     </div>
                                 </div>
                             )}
-                            </div>
                         </div>
                     </div>
                 </div>

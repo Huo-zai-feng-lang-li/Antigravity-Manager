@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.31 (2026-09-17)**:
+        -   **[详情弹窗加入场过渡动画（GPU 合成层，不卡）]**:
+            -   **方案**: 遮罩层 `opacity` 淡入（200ms），弹窗 `opacity + scale(0.95→1)` 淡入缩放，全部走 GPU 合成层（transform/opacity），不触发布局重排。
+            -   **性能**: 不用 backdrop-filter，不用 smooth 滚动动画，避免 WebView2 实时模糊和长内容滚动动画卡顿。
     *   **v4.8.30 (2026-09-17)**:
         -   **[修复详情弹窗卡顿：去 backdrop-blur + 瞬时滚动]**:
             -   **根因**: WebView2/Windows 上 `backdrop-blur-sm` 实时模糊背后的滚动表格极耗 GPU；`smooth` 滚动在长内容上也会卡主线程。

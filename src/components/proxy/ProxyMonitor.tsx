@@ -313,6 +313,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const isMountedRef = useRef(true);
     const detailScrollRef = useRef<HTMLDivElement>(null);
     const detailTabRef = useRef<HTMLDivElement>(null);
+    const [modalVisible, setModalVisible] = useState(false);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -468,16 +469,17 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         setCopiedRequestId(null);
     }, [selectedLog?.id]);
 
-    // 打开详情时立即定位到 tab 栏位置（瞬时，避免长内容上 smooth 动画卡顿）
+    // 打开详情时淡入+缩放入场过渡（GPU 合成层，不卡），并立即定位到 tab
     useEffect(() => {
-        if (selectedLog && detailScrollRef.current && detailTabRef.current) {
-            const raf = requestAnimationFrame(() => {
-                if (detailScrollRef.current && detailTabRef.current) {
-                    detailScrollRef.current.scrollTop = detailTabRef.current.offsetTop - 16;
-                }
-            });
-            return () => cancelAnimationFrame(raf);
-        }
+        if (!selectedLog) { setModalVisible(false); return; }
+        setModalVisible(false);
+        const raf = requestAnimationFrame(() => {
+            setModalVisible(true);
+            if (detailScrollRef.current && detailTabRef.current) {
+                detailScrollRef.current.scrollTop = detailTabRef.current.offsetTop - 16;
+            }
+        });
+        return () => cancelAnimationFrame(raf);
     }, [selectedLog?.id]);
 
     // Reload when pageSize changes
@@ -684,8 +686,14 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             </div>
 
             {selectedLog && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedLog(null)}>
-                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-300" onClick={e => e.stopPropagation()}>
+                <div
+                    className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 transition-opacity duration-200 ease-out ${modalVisible ? 'opacity-100' : 'opacity-0'}`}
+                    onClick={() => setSelectedLog(null)}
+                >
+                    <div
+                        className={`bg-white dark:bg-base-100 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-300 transition-all duration-200 ease-out ${modalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}
+                        onClick={e => e.stopPropagation()}
+                    >
                         {/* Modal Header */}
                         <div className="px-4 py-3 border-b border-gray-100 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200">
                             <div className="flex items-center gap-3">

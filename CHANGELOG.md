@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.27 (2026-09-17)**:
+        -   **[Bugfix: IpStatistics onFocusChanged 监听器泄漏]**:
+            -   **问题**: v4.8.26 给 IpStatistics 加可见性感知时，useEffect 依赖 `[loadStats]`，切换时间范围会重跑 effect。若动态 import Tauri 模块尚未完成就切换，旧的 `unlistenFocus` 仍为 null，旧 onFocusChanged 监听器泄漏。
+            -   **修复**: 改用 `focusUnlistenRef` 持有监听器句柄，cleanup 时从 ref 读取并清理；同时补 `isTauri()` 检查，web 模式下不再不必要加载 Tauri 模块。
     *   **v4.8.26 (2026-09-17)**:
         -   **[全局轮询省电：ApiProxy/IpStatistics 失焦暂停 + timeout timer 泄漏修复]**:
             -   **ApiProxy 页**: 3s 代理状态轮询 + 5s Cloudflared 状态轮询，加 visibilitychange + Tauri onFocusChanged 双信号，窗口失焦/最小化时自动暂停，恢复时继续。

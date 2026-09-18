@@ -6,6 +6,7 @@ import { showToast } from '../common/ToastContainer';
 import { formatCompactNumber } from '../../utils/format';
 import { describeIp, compactIp } from '../../utils/ipFormat';
 import type { IpStatsResponse, IpTokenStats, IpRanking } from '../../types/security';
+import { isTauri } from '../../utils/env';
 
 interface Props {
     refreshKey?: number;
@@ -60,12 +61,13 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeRange, refreshKey]);
 
+    const focusUnlistenRef = useRef<(() => void) | null>(null);
+
     useEffect(() => {
         enrichScheduledRef.current = false;
         loadStats();
 
         let poll: number | null = null;
-        let unlistenFocus: (() => void) | null = null;
         let isVisible = document.visibilityState === 'visible';
         let isFocused = true;
 
@@ -83,16 +85,18 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
         const onVis = () => { isVisible = document.visibilityState === 'visible'; refresh(); };
         document.addEventListener('visibilitychange', onVis);
 
-        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-            getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-                isFocused = focused; refresh();
-            }).then(un => { unlistenFocus = un; });
-        }).catch(() => {});
+        if (isTauri()) {
+            import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+                getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+                    isFocused = focused; refresh();
+                }).then(un => { focusUnlistenRef.current = un; });
+            }).catch(() => {});
+        }
 
         start();
         return () => {
             document.removeEventListener('visibilitychange', onVis);
-            if (unlistenFocus) unlistenFocus();
+            if (focusUnlistenRef.current) { focusUnlistenRef.current(); focusUnlistenRef.current = null; }
             stop();
             if (enrichTimer.current) clearTimeout(enrichTimer.current);
         };

@@ -63,9 +63,37 @@ export const IpStatistics: React.FC<Props> = ({ refreshKey, onJumpBlocked }) => 
     useEffect(() => {
         enrichScheduledRef.current = false;
         loadStats();
-        const poll = setInterval(() => loadStats(false, true), 5000);
+
+        let poll: number | null = null;
+        let unlistenFocus: (() => void) | null = null;
+        let isVisible = document.visibilityState === 'visible';
+        let isFocused = true;
+
+        const start = () => {
+            if (poll) return;
+            poll = setInterval(() => loadStats(false, true), 5000);
+        };
+        const stop = () => {
+            if (poll) { clearInterval(poll); poll = null; }
+        };
+        const refresh = () => {
+            if (isVisible && isFocused) start(); else stop();
+        };
+
+        const onVis = () => { isVisible = document.visibilityState === 'visible'; refresh(); };
+        document.addEventListener('visibilitychange', onVis);
+
+        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+            getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+                isFocused = focused; refresh();
+            }).then(un => { unlistenFocus = un; });
+        }).catch(() => {});
+
+        start();
         return () => {
-            clearInterval(poll);
+            document.removeEventListener('visibilitychange', onVis);
+            if (unlistenFocus) unlistenFocus();
+            stop();
             if (enrichTimer.current) clearTimeout(enrichTimer.current);
         };
     }, [loadStats]);

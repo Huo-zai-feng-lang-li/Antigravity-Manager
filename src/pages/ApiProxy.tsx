@@ -243,11 +243,42 @@ export default function ApiProxy() {
         loadPreferredAccount();
         loadCfStatus();
         loadCustomPresets();
-        const interval = setInterval(loadStatus, 3000);
-        const cfInterval = setInterval(loadCfStatus, 5000);
+
+        let interval: number | null = null;
+        let cfInterval: number | null = null;
+        let unlistenFocus: (() => void) | null = null;
+        let isVisible = document.visibilityState === 'visible';
+        let isFocused = true;
+
+        const start = () => {
+            if (interval) return;
+            interval = setInterval(loadStatus, 3000);
+            cfInterval = setInterval(loadCfStatus, 5000);
+        };
+        const stop = () => {
+            if (interval) { clearInterval(interval); interval = null; }
+            if (cfInterval) { clearInterval(cfInterval); cfInterval = null; }
+        };
+        const refresh = () => {
+            if (isVisible && isFocused) start(); else stop();
+        };
+
+        const onVis = () => { isVisible = document.visibilityState === 'visible'; refresh(); };
+        document.addEventListener('visibilitychange', onVis);
+
+        if (isTauri()) {
+            import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+                getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+                    isFocused = focused; refresh();
+                }).then(un => { unlistenFocus = un; });
+            }).catch(() => {});
+        }
+
+        start();
         return () => {
-            clearInterval(interval);
-            clearInterval(cfInterval);
+            document.removeEventListener('visibilitychange', onVis);
+            if (unlistenFocus) unlistenFocus();
+            stop();
         };
     }, []);
 

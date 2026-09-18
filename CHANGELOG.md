@@ -3,6 +3,11 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.26 (2026-09-17)**:
+        -   **[全局轮询省电：ApiProxy/IpStatistics 失焦暂停 + timeout timer 泄漏修复]**:
+            -   **ApiProxy 页**: 3s 代理状态轮询 + 5s Cloudflared 状态轮询，加 visibilitychange + Tauri onFocusChanged 双信号，窗口失焦/最小化时自动暂停，恢复时继续。
+            -   **IpStatistics 页**: 5s IP 统计轮询，同样加可见性感知，失焦暂停。
+            -   **ProxyMonitor**: 用 `withTimeout` helper 替代 `Promise.race + 共享 timeoutPromise`，请求完成后立即 clearTimeout，修复此前每次轮询泄漏一个 10s timer 的问题。
     *   **v4.8.25 (2026-09-17)**:
         -   **[流量日志 Tab 切换器美化 + 轮询省资源]**:
             -   **Tab 美化**: 两个 Tab 按钮从 daisyUI `btn btn-xs` 改为纯 Tailwind `px-3 py-1.5`，按钮更宽、间距更明确；选中态 `shadow-sm` 更精致，未选中态 hover 有浅灰背景反馈。

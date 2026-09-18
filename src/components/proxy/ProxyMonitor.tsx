@@ -13,6 +13,17 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { parseLogPayload } from './logPayloadParser';
 import { ConversationView } from './ConversationView';
 
+/** 给 Promise 加超时，完成后立即 clearTimeout，避免 timer 泄漏 */
+function withTimeout<T>(p: Promise<T>, ms = 10000): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Request timeout')), ms);
+        p.then(
+            v => { clearTimeout(timer); resolve(v); },
+            e => { clearTimeout(timer); reject(e); }
+        );
+    });
+}
+
 
 interface ProxyRequestLog {
     id: string;
@@ -209,17 +220,11 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         setLoading(true);
 
         try {
-            // Add timeout control (10 seconds)
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Request timeout')), 10000)
-            );
-
             // config 同步只在首次加载/用户操作时执行；轮询时跳过，避免每 5s 多读一次全量配置
             if (syncConfig) {
-                const config = await Promise.race([
-                    invoke<AppConfig>('load_config'),
-                    timeoutPromise
-                ]) as AppConfig;
+                const config = await withTimeout(
+                    invoke<AppConfig>('load_config')
+                ) as AppConfig;
 
                 if (config && config.proxy) {
                     setIsLoggingEnabled(config.proxy.enable_logging);
@@ -234,26 +239,24 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 : baseFilter;
 
             // Get count with filter
-            const count = await Promise.race([
+            const count = await withTimeout(
                 invoke<number>('get_proxy_logs_count_filtered', {
                     filter: actualFilter,
                     errorsOnly: errorsOnly
-                }),
-                timeoutPromise
-            ]) as number;
+                })
+            ) as number;
             setTotalCount(count);
 
             // Use filtered paginated query
             const offset = (page - 1) * pageSize;
-            const history = await Promise.race([
+            const history = await withTimeout(
                 invoke<ProxyRequestLog[]>('get_proxy_logs_filtered', {
                     filter: actualFilter,
                     errorsOnly: errorsOnly,
                     limit: pageSize,
                     offset: offset
-                }),
-                timeoutPromise
-            ]) as ProxyRequestLog[];
+                })
+            ) as ProxyRequestLog[];
 
             if (Array.isArray(history)) {
                 setLogs(history);
@@ -261,10 +264,9 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 pendingLogsRef.current = [];
             }
 
-            const currentStats = await Promise.race([
-                invoke<ProxyStats>('get_proxy_stats'),
-                timeoutPromise
-            ]) as ProxyStats;
+            const currentStats = await withTimeout(
+                invoke<ProxyStats>('get_proxy_stats')
+            ) as ProxyStats;
 
             if (currentStats) setStats(currentStats);
         } catch (e: any) {

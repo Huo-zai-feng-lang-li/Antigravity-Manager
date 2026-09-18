@@ -311,6 +311,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const pendingLogsRef = useRef<ProxyRequestLog[]>([]);
     const listenerSetupRef = useRef(false);
     const isMountedRef = useRef(true);
+    const detailScrollRef = useRef<HTMLDivElement>(null);
+    const detailTabRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -464,6 +466,18 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
     useEffect(() => {
         setCopiedRequestId(null);
+    }, [selectedLog?.id]);
+
+    // 打开详情时自动滚动到 tab 栏位置，让对话视图立即可见
+    useEffect(() => {
+        if (selectedLog && detailScrollRef.current && detailTabRef.current) {
+            const raf = requestAnimationFrame(() => {
+                if (detailScrollRef.current && detailTabRef.current) {
+                    detailScrollRef.current.scrollTop = detailTabRef.current.offsetTop - 16;
+                }
+            });
+            return () => cancelAnimationFrame(raf);
+        }
     }, [selectedLog?.id]);
 
     // Reload when pageSize changes
@@ -684,7 +698,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                         </div>
 
                         {/* Modal Content */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white dark:bg-base-100">
+                        <div ref={detailScrollRef} className="flex-1 overflow-y-auto p-4 space-y-6 bg-white dark:bg-base-100">
                             {/* Metadata Section */}
                             <div className="bg-gray-50 dark:bg-base-200 p-5 rounded-xl border border-gray-200 dark:border-base-300 shadow-inner">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-5 gap-x-10">
@@ -739,7 +753,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             </div>
 
                             {/* View Switcher Tabs */}
-                            <div className="flex items-center justify-between border-b border-gray-200 dark:border-base-300 pb-2">
+                            <div ref={detailTabRef} className="flex items-center justify-between border-b border-gray-200 dark:border-base-300 pb-2">
                                 <div className="flex items-center gap-1 p-1 bg-gray-100 dark:bg-base-200 rounded-lg">
                                     <button
                                         type="button"

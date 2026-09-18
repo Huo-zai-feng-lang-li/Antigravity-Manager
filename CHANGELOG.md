@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.28 (2026-09-17)**:
+        -   **[流量日志详情弹窗打开时自动定位到对话视图]**:
+            -   **问题**: 打开详情弹窗时默认停在顶部元信息区（时间/模型/tokens），用户实际想看的是下方的对话视图，需要手动滚动。
+            -   **方案**: 给滚动容器和 tab 栏加 ref，`selectedLog.id` 变化时用 `requestAnimationFrame` 自动滚动到 tab 位置（`offsetTop - 16px` 留呼吸边距）。元信息仍在上方，想看可往上滚。
     *   **v4.8.27 (2026-09-17)**:
         -   **[Bugfix: IpStatistics onFocusChanged 监听器泄漏]**:
             -   **问题**: v4.8.26 给 IpStatistics 加可见性感知时，useEffect 依赖 `[loadStats]`，切换时间范围会重跑 effect。若动态 import Tauri 模块尚未完成就切换，旧的 `unlistenFocus` 仍为 null，旧 onFocusChanged 监听器泄漏。

@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.30 (2026-09-17)**:
+        -   **[修复详情弹窗卡顿：去 backdrop-blur + 瞬时滚动]**:
+            -   **根因**: WebView2/Windows 上 `backdrop-blur-sm` 实时模糊背后的滚动表格极耗 GPU；`smooth` 滚动在长内容上也会卡主线程。
+            -   **修复**: 去掉遮罩层 `backdrop-blur-sm`，弹窗阴影从 `shadow-2xl` 降为 `shadow-xl`；自动定位从 `scrollTo({behavior:'smooth'})` 改回瞬时 `scrollTop`。
     *   **v4.8.29 (2026-09-17)**:
         -   **[详情弹窗滚动加平滑过渡动画]**:
             -   **改动**: 自动滚动从瞬时 `scrollTop` 改为浏览器原生 `scrollTo({ top, behavior: 'smooth' })`，由浏览器合成器线程驱动，不占主线程。

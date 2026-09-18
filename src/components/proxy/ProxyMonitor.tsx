@@ -468,15 +468,12 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         setCopiedRequestId(null);
     }, [selectedLog?.id]);
 
-    // 打开详情时自动平滑滚动到 tab 栏位置，让对话视图立即可见
+    // 打开详情时立即定位到 tab 栏位置（瞬时，避免长内容上 smooth 动画卡顿）
     useEffect(() => {
         if (selectedLog && detailScrollRef.current && detailTabRef.current) {
             const raf = requestAnimationFrame(() => {
                 if (detailScrollRef.current && detailTabRef.current) {
-                    detailScrollRef.current.scrollTo({
-                        top: detailTabRef.current.offsetTop - 16,
-                        behavior: 'smooth'
-                    });
+                    detailScrollRef.current.scrollTop = detailTabRef.current.offsetTop - 16;
                 }
             });
             return () => cancelAnimationFrame(raf);
@@ -687,8 +684,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             </div>
 
             {selectedLog && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setSelectedLog(null)}>
-                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-300" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedLog(null)}>
+                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-300" onClick={e => e.stopPropagation()}>
                         {/* Modal Header */}
                         <div className="px-4 py-3 border-b border-gray-100 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200">
                             <div className="flex items-center gap-3">

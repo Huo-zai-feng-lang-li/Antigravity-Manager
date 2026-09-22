@@ -1162,24 +1162,29 @@ pub async fn get_token_stats_today_by_account() -> Result<Vec<AccountTokenStats>
 }
 
 #[tauri::command]
-pub async fn get_token_stats_today_by_model() -> Result<Vec<crate::modules::token_stats::ModelTokenStats>, String> {
+pub async fn get_token_stats_today_by_model(
+) -> Result<Vec<crate::modules::token_stats::ModelTokenStats>, String> {
     tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_model_stats())
         .await
         .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub async fn get_token_stats_today_model_trend() -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
+pub async fn get_token_stats_today_model_trend(
+) -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
     tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_model_trend_hourly())
         .await
         .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub async fn get_token_stats_today_account_trend() -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
-    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_account_trend_hourly())
-        .await
-        .map_err(|e| format!("Task panicked: {}", e))?
+pub async fn get_token_stats_today_account_trend(
+) -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::modules::token_stats::get_today_account_trend_hourly()
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[tauri::command]

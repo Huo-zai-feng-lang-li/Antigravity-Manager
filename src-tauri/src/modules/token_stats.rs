@@ -639,10 +639,7 @@ pub fn get_today_model_trend_hourly() -> Result<Vec<ModelTrendPoint>, String> {
 
     Ok(trend_map
         .into_iter()
-        .map(|(period, model_data)| ModelTrendPoint {
-            period,
-            model_data,
-        })
+        .map(|(period, model_data)| ModelTrendPoint { period, model_data })
         .collect())
 }
 
@@ -1112,7 +1109,10 @@ mod tests {
     fn test_today_start_timestamp_aligns_with_local_midnight() {
         use chrono::{Local, TimeZone, Timelike};
         let ts = today_start_timestamp();
-        let dt = Local.timestamp_opt(ts, 0).single().expect("valid timestamp");
+        let dt = Local
+            .timestamp_opt(ts, 0)
+            .single()
+            .expect("valid timestamp");
         assert_eq!(dt.hour(), 0);
         assert_eq!(dt.minute(), 0);
         assert_eq!(dt.second(), 0);

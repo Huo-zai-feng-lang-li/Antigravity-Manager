@@ -22,7 +22,13 @@ function Navbar() {
     const [searchParams] = useSearchParams();
     const currentRange = parseTokenStatsTimeRange(searchParams.get('range'));
     const isTokenStats = location.pathname === '/token-stats';
-    const rangeLabel = t(`token_stats.${currentRange}`);
+    const rangeLabelMap: Record<string, string> = {
+        today: t('token_stats.today', '今日'),
+        hourly: t('token_stats.hourly', '小时'),
+        daily: t('token_stats.daily', '日'),
+        weekly: t('token_stats.weekly', '周'),
+    };
+    const rangeLabel = rangeLabelMap[currentRange] || currentRange;
     const tokenStatsLabel = isTokenStats
         ? `${t('nav.token_stats', 'Token 统计')} · ${rangeLabel}`
         : t('nav.token_stats', 'Token 统计');

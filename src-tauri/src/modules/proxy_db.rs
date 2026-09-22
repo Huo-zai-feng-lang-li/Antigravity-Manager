@@ -245,7 +245,20 @@ fn clean_title_from_text(text: &str) -> Option<String> {
         .trim_matches(|c: char| {
             matches!(
                 c,
-                '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '《' | '》' | '【' | '】' | '[' | ']' | '(' | ')'
+                '"' | '\''
+                    | '`'
+                    | '“'
+                    | '”'
+                    | '‘'
+                    | '’'
+                    | '《'
+                    | '》'
+                    | '【'
+                    | '】'
+                    | '['
+                    | ']'
+                    | '('
+                    | ')'
             )
         })
         .trim();
@@ -256,10 +269,7 @@ fn clean_title_from_text(text: &str) -> Option<String> {
             clean = clean[prefix.len()..].trim();
             clean = clean
                 .trim_matches(|c: char| {
-                    matches!(
-                        c,
-                        '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '《' | '》'
-                    )
+                    matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '《' | '》')
                 })
                 .trim();
             break;
@@ -296,7 +306,10 @@ fn clean_title_from_text(text: &str) -> Option<String> {
 /// 从响应 JSON 中提取文本正文（兼容 Chat/Completion/Responses/Anthropic/聚合流）
 fn extract_response_content(v: &serde_json::Value) -> Option<&str> {
     // 1. 标准 OpenAI Chat / Completion
-    if let Some(c) = v.pointer("/choices/0/message/content").and_then(|x| x.as_str()) {
+    if let Some(c) = v
+        .pointer("/choices/0/message/content")
+        .and_then(|x| x.as_str())
+    {
         return Some(c);
     }
     if let Some(c) = v.pointer("/choices/0/text").and_then(|x| x.as_str()) {

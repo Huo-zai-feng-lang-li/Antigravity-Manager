@@ -785,9 +785,8 @@ mod tests {
         // 防护网：更新检测的“当前版本”取自 CARGO_PKG_VERSION（Cargo.toml），
         // 而界面版本取自 tauri.conf.json。二者一旦漂移（发版漏改 Cargo.toml），
         // 就会出现“已是最新却提示发现新版本”的误报。此测试在版本不一致时直接失败。
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../../tauri.conf.json"))
-                .expect("tauri.conf.json must be valid JSON");
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json must be valid JSON");
         let tauri_version = conf["version"]
             .as_str()
             .expect("tauri.conf.json must contain a version string")

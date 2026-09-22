@@ -3,6 +3,15 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.33 (2026-09-22)**:
+        -   **[Token Stats Enhancement & Local Timezone Offset Fix]**:
+            -   `token_stats.rs`: Introduced 6 aggregated metrics for today's token consumption (total tokens, by-model, by-IP, by-token, 24-hour distribution, and today's request count), backed by SQLite composite indices.
+            -   Timezone Alignment: Fixed `today_start_timestamp` calculating local midnight incorrectly via UTC conversion. Replaced with local time subtraction (`now.timestamp() - seconds_from_midnight`), eliminating missed records from 00:00 to 08:00; backed by unit tests.
+            -   `TokenStats.tsx`: Added "Today" view tab, refactored data fetching, and unified formatting logic with `formatTokenCount`.
+        -   **[UserToken UX Overhaul & Hardware Accelerated Animation]**:
+            -   `UserToken.tsx`: Refactored detail row expand/collapse animation using CSS Grid (`grid-rows-[1fr] / grid-rows-[0fr]` + single-chevron `rotate-90`), matching traffic and access log patterns. Added `openedIds` for lazy rendering without reflow.
+            -   Search Enhancement: Lifted 8-character prefix restriction, allowing searching tokens by any substring or suffix.
+            -   Quota Visualization: Added dual-tier usage progress bars (70%/90% thresholds) and compact status badges.
     *   **v4.8.32 (2026-09-18)**:
         -   **[Desktop Account Switching Blocking Mitigation]**:
             -   Offloaded `close_antigravity` and process checks in `integration.rs` to `tokio::task::spawn_blocking`, preventing synchronous sleep polling from hanging Tokio worker threads and eliminating UI freezes.

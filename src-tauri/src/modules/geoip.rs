@@ -122,7 +122,9 @@ pub fn parse_baidu_response(body: &str) -> Result<Option<IpGeoInfo>, String> {
             for item in items {
                 for sub in item.sub_items {
                     let sub_trimmed = sub.trim();
-                    if !sub_trimmed.is_empty() && !risk_labels.iter().any(|l: &String| l == sub_trimmed) {
+                    if !sub_trimmed.is_empty()
+                        && !risk_labels.iter().any(|l: &String| l == sub_trimmed)
+                    {
                         risk_labels.push(sub_trimmed.to_string());
                     }
                 }

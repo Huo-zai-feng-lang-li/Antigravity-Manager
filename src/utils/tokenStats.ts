@@ -1,4 +1,4 @@
-export const TOKEN_STATS_TIME_RANGES = ['hourly', 'daily', 'weekly'] as const;
+export const TOKEN_STATS_TIME_RANGES = ['today', 'hourly', 'daily', 'weekly'] as const;
 
 export type TokenStatsTimeRange = (typeof TOKEN_STATS_TIME_RANGES)[number];
 
@@ -35,6 +35,7 @@ export function setStoredTokenStatsTimeRange(range: TokenStatsTimeRange): void {
 
 export function getTimeRangeShortBadge(range: TokenStatsTimeRange): string {
     switch (range) {
+        case 'today': return 'T';
         case 'hourly': return 'H';
         case 'daily': return 'D';
         case 'weekly': return 'W';

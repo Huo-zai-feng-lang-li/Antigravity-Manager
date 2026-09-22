@@ -7,7 +7,6 @@ import {
     Copy,
     CheckCircle,
     ChevronDown,
-    ChevronUp,
     AlertTriangle,
     Sliders,
     MessageSquare,
@@ -89,14 +88,20 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             <span className="text-[10px] text-gray-400">
                                 {parsed.systemPrompt.length} {t('monitor.conversation.chars', '字符')}
                             </span>
-                            {isSystemOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            <ChevronDown size={14} className={`transition-transform duration-200 ease-out ${isSystemOpen ? 'rotate-180' : ''}`} />
                         </div>
                     </button>
-                    {isSystemOpen && (
-                        <div className="p-4 border-t border-gray-200 dark:border-base-300 bg-white dark:bg-base-100 max-h-60 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-gray-700 dark:text-gray-300 leading-relaxed">
-                            {parsed.systemPrompt}
+                    <div
+                        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                            isSystemOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                        }`}
+                    >
+                        <div className="overflow-hidden">
+                            <div className="p-4 border-t border-gray-200 dark:border-base-300 bg-white dark:bg-base-100 max-h-60 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-gray-700 dark:text-gray-300 leading-relaxed">
+                                {parsed.systemPrompt}
+                            </div>
                         </div>
-                    )}
+                    </div>
                 </div>
             )}
 
@@ -219,23 +224,29 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             <MessageSquare size={14} className="text-blue-500" />
                             {t('monitor.conversation.history_context', '完整会话上下文')} ({parsed.allMessages.length} {t('monitor.conversation.messages_count', '条消息')})
                         </span>
-                        {isHistoryOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        <ChevronDown size={14} className={`transition-transform duration-200 ease-out ${isHistoryOpen ? 'rotate-180' : ''}`} />
                     </button>
-                    {isHistoryOpen && (
-                        <div className="p-3 border-t border-gray-200 dark:border-base-300 space-y-2 bg-white dark:bg-base-100 max-h-72 overflow-y-auto">
-                            {parsed.allMessages.map((msg, idx) => (
-                                <div key={idx} className="p-2.5 rounded-lg bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300">
-                                    <div className="text-[10px] font-bold uppercase text-gray-500 mb-1 flex items-center gap-1.5">
-                                        <span className={`w-1.5 h-1.5 rounded-full ${msg.role === 'user' ? 'bg-blue-500' : msg.role === 'assistant' ? 'bg-emerald-500' : msg.role === 'tool' ? 'bg-amber-500' : 'bg-purple-500'}`} />
-                                        {msg.role}
+                    <div
+                        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                            isHistoryOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                        }`}
+                    >
+                        <div className="overflow-hidden">
+                            <div className="p-3 border-t border-gray-200 dark:border-base-300 space-y-2 bg-white dark:bg-base-100 max-h-72 overflow-y-auto">
+                                {parsed.allMessages.map((msg, idx) => (
+                                    <div key={idx} className="p-2.5 rounded-lg bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300">
+                                        <div className="text-[10px] font-bold uppercase text-gray-500 mb-1 flex items-center gap-1.5">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${msg.role === 'user' ? 'bg-blue-500' : msg.role === 'assistant' ? 'bg-emerald-500' : msg.role === 'tool' ? 'bg-amber-500' : 'bg-purple-500'}`} />
+                                            {msg.role}
+                                        </div>
+                                        <div className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                            {msg.content}
+                                        </div>
                                     </div>
-                                    <div className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                        {msg.content}
-                                    </div>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
-                    )}
+                    </div>
                 </div>
             )}
 
@@ -255,14 +266,20 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             <span className="text-[10px] text-amber-700/80 dark:text-amber-400/80 font-normal">
                                 {isThinkingOpen ? t('common.collapse', '折叠') : `${t('common.expand', '展开')} (${parsed.thinking.length} ${t('monitor.conversation.chars', '字符')})`}
                             </span>
-                            {isThinkingOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            <ChevronDown size={14} className={`transition-transform duration-200 ease-out ${isThinkingOpen ? 'rotate-180' : ''}`} />
                         </div>
                     </button>
-                    {isThinkingOpen && (
-                        <div className="p-4 border-t border-amber-200/50 dark:border-amber-900/40 bg-white/60 dark:bg-base-100 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs font-sans text-amber-950 dark:text-amber-200/90 leading-relaxed select-text">
-                            {parsed.thinking}
+                    <div
+                        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                            isThinkingOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                        }`}
+                    >
+                        <div className="overflow-hidden">
+                            <div className="p-4 border-t border-amber-200/50 dark:border-amber-900/40 bg-white/60 dark:bg-base-100 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs font-sans text-amber-950 dark:text-amber-200/90 leading-relaxed select-text">
+                                {parsed.thinking}
+                            </div>
                         </div>
-                    )}
+                    </div>
                 </div>
             )}
 

@@ -429,6 +429,266 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
     Ok(result)
 }
 
+// ==================== 今日（自然日 00:00 ~ 现在）系列查询 ====================
+
+fn today_start_hour_bucket() -> String {
+    chrono::Local::now().format("%Y-%m-%d 00:00").to_string()
+}
+
+fn today_start_timestamp() -> i64 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    let seconds_since_midnight = now.time().num_seconds_from_midnight();
+    now.timestamp() - seconds_since_midnight as i64
+}
+
+pub fn get_today_hourly_stats() -> Result<Vec<TokenStatsAggregated>, String> {
+    let conn = connect_db()?;
+    let cutoff_bucket = today_start_hour_bucket();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT hour_bucket,
+                SUM(total_input_tokens) as input,
+                SUM(total_output_tokens) as output,
+                SUM(total_cached_tokens) as cached,
+                SUM(total_tokens) as total,
+                SUM(request_count) as count
+         FROM token_stats_hourly
+         WHERE hour_bucket >= ?1
+         GROUP BY hour_bucket
+         ORDER BY hour_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([cutoff_bucket], |row| {
+            Ok(TokenStatsAggregated {
+                period: row.get(0)?,
+                total_input_tokens: row.get(1)?,
+                total_output_tokens: row.get(2)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
+}
+
+pub fn get_today_summary() -> Result<TokenStatsSummary, String> {
+    let conn = connect_db()?;
+    let cutoff_bucket = today_start_hour_bucket();
+
+    let (total_input, total_output, total_cached, total, requests): (u64, u64, u64, u64, u64) =
+        conn.query_row(
+            "SELECT COALESCE(SUM(total_input_tokens), 0),
+                COALESCE(SUM(total_output_tokens), 0),
+                COALESCE(SUM(total_cached_tokens), 0),
+                COALESCE(SUM(total_tokens), 0),
+                COALESCE(SUM(request_count), 0)
+         FROM token_stats_hourly
+         WHERE hour_bucket >= ?1",
+            [&cutoff_bucket],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let unique_accounts: u64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT account_email) FROM token_stats_hourly WHERE hour_bucket >= ?1",
+            [&cutoff_bucket],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(TokenStatsSummary {
+        total_input_tokens: total_input,
+        total_output_tokens: total_output,
+        total_cached_tokens: total_cached,
+        total_tokens: total,
+        total_requests: requests,
+        unique_accounts,
+    })
+}
+
+pub fn get_today_account_stats() -> Result<Vec<AccountTokenStats>, String> {
+    let conn = connect_db()?;
+    let cutoff_bucket = today_start_hour_bucket();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT account_email,
+                SUM(total_input_tokens) as input,
+                SUM(total_output_tokens) as output,
+                SUM(total_cached_tokens) as cached,
+                SUM(total_tokens) as total,
+                SUM(request_count) as count
+         FROM token_stats_hourly
+         WHERE hour_bucket >= ?1
+         GROUP BY account_email
+         ORDER BY total DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([cutoff_bucket], |row| {
+            Ok(AccountTokenStats {
+                account_email: row.get(0)?,
+                total_input_tokens: row.get(1)?,
+                total_output_tokens: row.get(2)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
+}
+
+pub fn get_today_model_stats() -> Result<Vec<ModelTokenStats>, String> {
+    let conn = connect_db()?;
+    let cutoff = today_start_timestamp();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT model,
+                SUM(input_tokens) as input,
+                SUM(output_tokens) as output,
+                SUM(cached_tokens) as cached,
+                SUM(total_tokens) as total,
+                COUNT(*) as count
+         FROM token_usage
+         WHERE timestamp >= ?1
+         GROUP BY model
+         ORDER BY total DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([cutoff], |row| {
+            Ok(ModelTokenStats {
+                model: row.get(0)?,
+                total_input_tokens: row.get(1)?,
+                total_output_tokens: row.get(2)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
+}
+
+pub fn get_today_model_trend_hourly() -> Result<Vec<ModelTrendPoint>, String> {
+    let conn = connect_db()?;
+    let cutoff = today_start_timestamp();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d %H:00', datetime(timestamp, 'unixepoch', 'localtime')) as hour_bucket,
+                model,
+                SUM(total_tokens) as total
+         FROM token_usage
+         WHERE timestamp >= ?1
+         GROUP BY hour_bucket, model
+         ORDER BY hour_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut trend_map: std::collections::BTreeMap<String, std::collections::HashMap<String, u64>> =
+        std::collections::BTreeMap::new();
+
+    let rows = stmt
+        .query_map([cutoff], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (period, model, total) = row.map_err(|e| e.to_string())?;
+        trend_map.entry(period).or_default().insert(model, total);
+    }
+
+    Ok(trend_map
+        .into_iter()
+        .map(|(period, model_data)| ModelTrendPoint {
+            period,
+            model_data,
+        })
+        .collect())
+}
+
+pub fn get_today_account_trend_hourly() -> Result<Vec<AccountTrendPoint>, String> {
+    let conn = connect_db()?;
+    let cutoff = today_start_timestamp();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d %H:00', datetime(timestamp, 'unixepoch', 'localtime')) as hour_bucket,
+                account_email,
+                SUM(total_tokens) as total
+         FROM token_usage
+         WHERE timestamp >= ?1
+         GROUP BY hour_bucket, account_email
+         ORDER BY hour_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut trend_map: std::collections::BTreeMap<String, std::collections::HashMap<String, u64>> =
+        std::collections::BTreeMap::new();
+
+    let rows = stmt
+        .query_map([cutoff], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (period, account, total) = row.map_err(|e| e.to_string())?;
+        trend_map.entry(period).or_default().insert(account, total);
+    }
+
+    Ok(trend_map
+        .into_iter()
+        .map(|(period, account_data)| AccountTrendPoint {
+            period,
+            account_data,
+        })
+        .collect())
+}
+
 /// Get summary statistics for a time range
 pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
     let conn = connect_db()?;
@@ -846,5 +1106,15 @@ mod tests {
             })
             .unwrap();
         assert_eq!(survivor_email, "fresh@example.com");
+    }
+
+    #[test]
+    fn test_today_start_timestamp_aligns_with_local_midnight() {
+        use chrono::{Local, TimeZone, Timelike};
+        let ts = today_start_timestamp();
+        let dt = Local.timestamp_opt(ts, 0).single().expect("valid timestamp");
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
     }
 }

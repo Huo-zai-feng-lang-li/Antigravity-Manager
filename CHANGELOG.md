@@ -3,6 +3,15 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.33 (2026-09-22)**:
+        -   **[Token 消费统计增强与时区偏移彻底根除]**:
+            -   `token_stats.rs`：新增今日 Token 统计 6 项聚合指标（总消耗、按模型统计、按 IP 统计、按 Token 统计、24 小时分布趋势、今日请求数），底层 SQL 复合索引无缝覆盖。
+            -   时区精准对齐：修复 `today_start_timestamp` 采用 naive date 转 UTC 导致的 8 小时数据偏移 Bug，改用本地时间减去当日已过秒数，消除凌晨 0-8 点数据漏计；补充单元测试。
+            -   `TokenStats.tsx`：接入“今日”自然日统计视图，重构图表获取逻辑，统一引入 `formatTokenCount` 消除冗余格式化代码。
+        -   **[UserToken 交互体验重构与硬件加速动画]**:
+            -   `UserToken.tsx`：详情行折叠动效全面重构为与安全/流量日志一致的 CSS Grid 方案（`grid-rows-[1fr] / grid-rows-[0fr]` + 单箭头 `rotate-90` 过渡），接入 `openedIds` 惰性渲染，彻底消除重绘与抖动。
+            -   搜索体验提升：解除前 8 位字符限制，支持全量 Token 字符串与特征后缀精准搜索。
+            -   配额可视化：新增额度使用率双进度条（70%/90% 阶梯预警）与紧凑状态徽章。
     *   **v4.8.32 (2026-09-18)**:
         -   **[桌面端账号切换阻塞消减]**:
             -   在 `integration.rs` 中将 `close_antigravity` 与进程状态检查迁移至 `tokio::task::spawn_blocking`，彻底避免主工作线程被休眠轮询阻塞，消除了账号切换时的 UI 假死现象。

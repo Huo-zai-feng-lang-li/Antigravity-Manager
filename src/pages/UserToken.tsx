@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, HelpCircle, CalendarPlus, CheckCircle2 } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, HelpCircle, CalendarPlus, CheckCircle2, Search, ChevronRight, Filter } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { request as invoke } from '../utils/request';
 import { showToast } from '../components/common/ToastContainer';
 import { copyToClipboard } from '../utils/clipboard';
+import { formatTokenCount } from '../utils/format';
 
 interface UserToken {
     id: string;
@@ -35,10 +36,7 @@ interface UserTokenStats {
     today_requests: number;
 }
 
-// interface CreateTokenRequest omitted as it's not explicitly used for typing variables
-
 // 额度预占量：必须与 Rust 后端 user_token_db.rs 的 QUOTA_HOLD_AMOUNT 保持一致。
-// 非零额度若小于该值，单个请求在预占阶段就会被拒（完全不可用），故前端提前阻止提交。
 const QUOTA_HOLD_AMOUNT = 8192;
 
 // 额度填写建议（hover 问号显示）
@@ -63,6 +61,17 @@ const MONTHLY_QUOTA_PRESETS = [
     { label: '团队 100万/月', value: 1000000 },
     { label: '企业 500万/月', value: 5000000 },
 ];
+
+// Token 状态枚举
+type TokenStatus = 'normal' | 'expiring' | 'expired' | 'quota_warning' | 'quota_danger';
+
+// 筛选选项
+const FILTER_OPTIONS = [
+    { value: 'all', label: '全部' },
+    { value: 'active', label: '正常' },
+    { value: 'expired', label: '已过期' },
+    { value: 'warning', label: '告警' },
+] as const;
 
 const UserToken: React.FC = () => {
     const { t } = useTranslation();
@@ -92,21 +101,27 @@ const UserToken: React.FC = () => {
     // 续期行内 loading
     const [renewingId, setRenewingId] = useState<string | null>(null);
 
+    // 搜索与筛选
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filterStatus, setFilterStatus] = useState<string>('all');
+    // 展开行详情与已展开集合（支持平滑折叠动画与惰性渲染）
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [openedIds, setOpenedIds] = useState<Set<string>>(() => new Set());
+
     // Create Form State
     const [newUsername, setNewUsername] = useState('');
     const [newDesc, setNewDesc] = useState('');
-    const [newExpiresType, setNewExpiresType] = useState('month'); // day, week, month, never, custom
+    const [newExpiresType, setNewExpiresType] = useState('month');
     const [newMaxIps, setNewMaxIps] = useState(0);
     const [newCurfewStart, setNewCurfewStart] = useState('');
     const [newCurfewEnd, setNewCurfewEnd] = useState('');
     const [newDailyQuota, setNewDailyQuota] = useState(0);
     const [newMonthlyQuota, setNewMonthlyQuota] = useState(0);
-    const [newCustomExpires, setNewCustomExpires] = useState(''); // datetime-local value
+    const [newCustomExpires, setNewCustomExpires] = useState('');
 
     const loadData = async () => {
         setLoading(true);
         try {
-            // 列表与统计独立加载：即使统计接口失败，列表也必须完成刷新，避免“点了刷新没反应”
             const tokensData = await invoke<UserToken[]>('list_user_tokens');
             setTokens(tokensData);
             try {
@@ -123,7 +138,6 @@ const UserToken: React.FC = () => {
         }
     };
 
-    // 手动点击刷新：本地 SQLite 查询毫秒级完成、数据无变化时视觉无感，补一个明确的成功反馈
     const handleRefresh = async () => {
         await loadData();
         showToast(t('user_token.refresh_success') || 'Token list refreshed', 'success');
@@ -138,14 +152,10 @@ const UserToken: React.FC = () => {
             showToast(t('user_token.username_required') || 'Username is required', 'error');
             return;
         }
-
-        // 验证自定义时间
         if (newExpiresType === 'custom' && !newCustomExpires) {
             showToast(t('user_token.custom_expires_required') || 'Please select a custom expiration time', 'error');
             return;
         }
-
-        // 验证额度：非零额度必须 >= 预占量，否则 Token 完全不可用
         if (newDailyQuota > 0 && newDailyQuota < QUOTA_HOLD_AMOUNT) {
             showToast(`每日额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
@@ -157,12 +167,10 @@ const UserToken: React.FC = () => {
 
         setCreating(true);
         try {
-            // 计算自定义过期时间戳
             const customExpiresAt = newExpiresType === 'custom' && newCustomExpires
                 ? Math.floor(new Date(newCustomExpires).getTime() / 1000)
                 : undefined;
 
-            // 后端返回完整 UserToken（含完整 token 明文），切换到成功视图供用户仅此一次复制
             const created = await invoke<UserToken>('create_user_token', {
                 request: {
                     username: newUsername,
@@ -187,7 +195,6 @@ const UserToken: React.FC = () => {
         }
     };
 
-    // 打开删除二次确认弹窗（不再点击即删，防误删不可恢复）
     const requestDelete = (token: UserToken) => setDeletingToken(token);
 
     const confirmDelete = async () => {
@@ -209,7 +216,7 @@ const UserToken: React.FC = () => {
         setEditingToken(token);
         setEditUsername(token.username);
         setEditDesc(token.description || '');
-        setEditMaxIps(token.max_ips ?? 0);  // 使用 ?? 确保 null/undefined 变为 0
+        setEditMaxIps(token.max_ips ?? 0);
         setEditCurfewStart(token.curfew_start ?? '');
         setEditCurfewEnd(token.curfew_end ?? '');
         setEditDailyQuota(token.daily_quota ?? 0);
@@ -223,8 +230,6 @@ const UserToken: React.FC = () => {
             showToast(t('user_token.username_required') || 'Username is required', 'error');
             return;
         }
-
-        // 验证额度：非零额度必须 >= 预占量，否则 Token 完全不可用
         if (editDailyQuota > 0 && editDailyQuota < QUOTA_HOLD_AMOUNT) {
             showToast(`每日额度不能小于 ${QUOTA_HOLD_AMOUNT}（或设为 0 不限制）`, 'error');
             return;
@@ -242,7 +247,6 @@ const UserToken: React.FC = () => {
                     username: editUsername,
                     description: editDesc || undefined,
                     max_ips: editMaxIps,
-                    // 使用双层包装: undefined = 不更新, null = 清空, string = 设置值
                     curfew_start: editCurfewStart === '' ? null : editCurfewStart,
                     curfew_end: editCurfewEnd === '' ? null : editCurfewEnd,
                     daily_quota: editDailyQuota,
@@ -270,13 +274,11 @@ const UserToken: React.FC = () => {
         } catch (e) {
             showToast(String(e), 'error');
         } finally {
-            // daisyUI dropdown 点选后不会自动收起，无论成败都主动 blur 关闭浮层
             (document.activeElement as HTMLElement | null)?.blur();
             setRenewingId(null);
         }
     };
 
-    // 打开展示创建弹窗：清空上一次成功态与表单
     const openCreateModal = () => {
         setCreatedToken(null);
         setNewUsername('');
@@ -291,7 +293,6 @@ const UserToken: React.FC = () => {
         setShowCreateModal(true);
     };
 
-    // 关闭创建弹窗并重置成功态与表单（成功视图"完成"与表单"取消"共用）
     const resetAndCloseCreateModal = () => {
         setShowCreateModal(false);
         setCreatedToken(null);
@@ -331,14 +332,98 @@ const UserToken: React.FC = () => {
         }
     };
 
-    // Calculate expiration status style
-    const getExpiresStatus = (expiresAt?: number) => {
-        if (!expiresAt) return 'text-green-500';
+    /**
+     * 计算 Token 的综合状态（取最严重的状态）
+     * 优先级：expired > quota_danger > expiring > quota_warning > normal
+     */
+    const getTokenStatus = (token: UserToken): TokenStatus => {
         const now = Date.now() / 1000;
-        if (expiresAt < now) return 'text-red-500 font-bold';
-        if (expiresAt - now < 86400 * 3) return 'text-orange-500'; // Less than 3 days
-        return 'text-green-500';
+
+        // 已过期
+        if (token.expires_at && token.expires_at < now) {
+            return 'expired';
+        }
+
+        // 额度危险（日或月用量 >= 90%）
+        const dailyPct = token.daily_quota > 0 ? (token.daily_used / token.daily_quota) * 100 : 0;
+        const monthlyPct = token.monthly_quota > 0 ? (token.monthly_used / token.monthly_quota) * 100 : 0;
+        if (dailyPct >= 90 || monthlyPct >= 90) {
+            return 'quota_danger';
+        }
+
+        // 即将过期（7天内）
+        if (token.expires_at && token.expires_at - now < 86400 * 7) {
+            return 'expiring';
+        }
+
+        // 额度警告（>= 70%）
+        if (dailyPct >= 70 || monthlyPct >= 70) {
+            return 'quota_warning';
+        }
+
+        return 'normal';
     };
+
+    // 获取状态对应的徽章配置
+    const getStatusBadge = (status: TokenStatus) => {
+        switch (status) {
+            case 'expired':
+                return { label: '已过期', className: 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-100 dark:border-red-900/30' };
+            case 'quota_danger':
+                return { label: '额度告急', className: 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-100 dark:border-red-900/30' };
+            case 'expiring':
+                return { label: '即将过期', className: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 border-orange-100 dark:border-orange-900/30' };
+            case 'quota_warning':
+                return { label: '额度预警', className: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 border-orange-100 dark:border-orange-900/30' };
+            default:
+                return { label: '正常', className: 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-100 dark:border-green-900/30' };
+        }
+    };
+
+    // 搜索 + 筛选后的列表
+    const filteredTokens = useMemo(() => {
+        let result = tokens;
+
+        // 关键词搜索（用户名 + 描述 + token前缀）
+        if (searchQuery.trim()) {
+            const q = searchQuery.trim().toLowerCase();
+            result = result.filter(token =>
+                token.username.toLowerCase().includes(q) ||
+                (token.description || '').toLowerCase().includes(q) ||
+                token.token.toLowerCase().includes(q)
+            );
+        }
+
+        // 状态筛选
+        if (filterStatus !== 'all') {
+            result = result.filter(token => {
+                const status = getTokenStatus(token);
+                switch (filterStatus) {
+                    case 'active':
+                        return status === 'normal';
+                    case 'expired':
+                        return status === 'expired';
+                    case 'warning':
+                        return status === 'expiring' || status === 'quota_warning' || status === 'quota_danger';
+                    default:
+                        return true;
+                }
+            });
+        }
+
+        return result;
+    }, [tokens, searchQuery, filterStatus]);
+
+    // 切换展开行
+    const toggleExpand = useCallback((id: string) => {
+        setExpandedId(prev => (prev === id ? null : id));
+        setOpenedIds(prev => {
+            if (prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+        });
+    }, []);
 
     return (
         <motion.div
@@ -428,174 +513,301 @@ const UserToken: React.FC = () => {
                 </motion.div>
             </div>
 
+            {/* 搜索与筛选栏 */}
+            <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder="搜索用户名、描述或 Token..."
+                        className="w-full pl-9 pr-4 py-2 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all"
+                    />
+                    {searchQuery && (
+                        <button
+                            onClick={() => setSearchQuery('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                            ×
+                        </button>
+                    )}
+                </div>
+                <div className="flex items-center gap-2">
+                    <Filter size={16} className="text-gray-400" />
+                    <div className="flex bg-white dark:bg-base-100 border border-gray-200 dark:border-base-200 rounded-lg p-0.5">
+                        {FILTER_OPTIONS.map(opt => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setFilterStatus(opt.value)}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                                    filterStatus === opt.value
+                                        ? 'bg-blue-500 text-white shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
             {/* Token List */}
             <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto bg-white dark:bg-base-100 rounded-2xl shadow-sm border border-gray-100 dark:border-base-200">
-                <table className="table table-pin-rows w-full table-fixed">
+                <table className="table w-full">
                     <thead>
                         <tr className="bg-gray-50 dark:bg-base-200">
+                            <th className="bg-transparent text-gray-500 font-medium py-4 w-10"></th>
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.username', { defaultValue: 'Username' })}</th>
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.token', { defaultValue: 'Token' })}</th>
                             <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.expires', { defaultValue: 'Expires' })}</th>
-                            <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.usage', { defaultValue: 'Usage' })}</th>
-                            <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.ip_limit', { defaultValue: 'IP Limit' })}</th>
-                            <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.created', { defaultValue: 'Created' })}</th>
+                            <th className="bg-transparent text-gray-500 font-medium py-4">{t('user_token.usage', { defaultValue: 'Usage & Quota' })}</th>
                             <th className="bg-transparent text-gray-500 font-medium py-4 text-right">{t('common.actions', { defaultValue: 'Actions' })}</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-base-200">
-                        <AnimatePresence mode="popLayout">
-                            {tokens.map((token, index) => (
-                                <motion.tr
-                                    key={token.id}
-                                    initial={{ opacity: 0, x: -10 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    transition={{ delay: index * 0.03 }}
-                                    className="hover:bg-gray-100 dark:hover:bg-base-200 transition-colors group"
-                                >
-                                    <td className="py-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-purple-50 dark:bg-purple-900/20 flex items-center justify-center text-purple-600 font-bold text-xs">
-                                                {token.username.substring(0, 2).toUpperCase()}
-                                            </div>
-                                            <div>
-                                                <div className="font-semibold text-gray-900 dark:text-white uppercase tracking-wider text-sm">{token.username}</div>
-                                                <div className="text-xs text-gray-500">{token.description || '-'}</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div className="flex items-center gap-2 group/token">
-                                            <code className="bg-gray-50 dark:bg-base-200 px-2 py-1 rounded border border-gray-100 dark:border-base-300 text-xs font-mono text-gray-600 dark:text-gray-400">
-                                                {token.token.substring(0, 8)}••••••••
-                                            </code>
-                                            <button
-                                                onClick={() => handleCopyToken(token.token)}
-                                                className="p-1.5 hover:bg-gray-200 dark:hover:bg-base-300 rounded-md transition-all text-gray-400 hover:text-gray-600 dark:hover:text-white"
-                                            >
-                                                <Copy size={13} />
-                                            </button>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div className={`text-sm font-medium mb-1 ${getExpiresStatus(token.expires_at)}`}>
-                                            {token.expires_at ? formatTime(token.expires_at) : t('user_token.never', { defaultValue: 'Never' })}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 rounded lowercase">
-                                                {getExpiresLabel(token.expires_type)}
-                                            </span>
-                                            {token.expires_at && token.expires_at < Date.now() / 1000 && (
-                                                <button
-                                                    onClick={() => handleRenew(token.id, token.expires_type)}
-                                                    className="text-xs text-blue-500 hover:underline font-medium"
+                        <AnimatePresence>
+                            {filteredTokens.map((token, index) => {
+                                const status = getTokenStatus(token);
+                                const badge = getStatusBadge(status);
+                                const isExpanded = expandedId === token.id;
+                                const isRendered = isExpanded || openedIds.has(token.id);
+                                const dailyPct = token.daily_quota > 0 ? Math.min(100, (token.daily_used / token.daily_quota) * 100) : 0;
+                                const monthlyPct = token.monthly_quota > 0 ? Math.min(100, (token.monthly_used / token.monthly_quota) * 100) : 0;
+
+                                return (
+                                    <React.Fragment key={token.id}>
+                                        <motion.tr
+                                            initial={{ opacity: 0, x: -10 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, scale: 0.95 }}
+                                            transition={{ delay: index * 0.03 }}
+                                            className={`bg-white dark:bg-base-100 hover:bg-gray-50 dark:hover:bg-base-200/50 transition-colors group cursor-pointer ${isExpanded ? 'bg-gray-50 dark:bg-base-200/30' : ''}`}
+                                            onClick={() => toggleExpand(token.id)}
+                                        >
+                                            {/* 展开箭头 */}
+                                            <td className="py-4 w-10 text-gray-400">
+                                                <div className="flex items-center justify-center">
+                                                    <ChevronRight
+                                                        size={16}
+                                                        className={`transition-transform duration-200 ease-out ${isExpanded ? 'rotate-90 text-blue-500 dark:text-blue-400' : 'text-gray-400 group-hover:text-gray-600'}`}
+                                                    />
+                                                </div>
+                                            </td>
+
+                                            {/* 用户名 + 状态徽章 */}
+                                            <td className="py-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-8 h-8 rounded-full bg-purple-50 dark:bg-purple-900/20 flex items-center justify-center text-purple-600 font-bold text-xs flex-shrink-0">
+                                                        {token.username.substring(0, 2).toUpperCase()}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-semibold text-gray-900 dark:text-white uppercase tracking-wider text-sm truncate">{token.username}</span>
+                                                            <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full border flex-shrink-0 ${badge.className}`}>
+                                                                {badge.label}
+                                                            </span>
+                                                        </div>
+                                                        <div className="text-xs text-gray-500 truncate">{token.description || '-'}</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+
+                                            {/* Token */}
+                                            <td onClick={e => e.stopPropagation()}>
+                                                <div className="flex items-center gap-2 group/token">
+                                                    <code className="bg-gray-50 dark:bg-base-200 px-2 py-1 rounded border border-gray-100 dark:border-base-300 text-xs font-mono text-gray-600 dark:text-gray-400">
+                                                        {token.token.substring(0, 8)}••••••••
+                                                    </code>
+                                                    <button
+                                                        onClick={() => handleCopyToken(token.token)}
+                                                        className="p-1.5 hover:bg-gray-200 dark:hover:bg-base-300 rounded-md transition-all text-gray-400 hover:text-gray-600 dark:hover:text-white"
+                                                    >
+                                                        <Copy size={13} />
+                                                    </button>
+                                                </div>
+                                            </td>
+
+                                            {/* 有效期 */}
+                                            <td onClick={e => e.stopPropagation()}>
+                                                <div className={`text-sm font-medium mb-1 ${
+                                                    status === 'expired' ? 'text-red-500 font-bold' :
+                                                    status === 'expiring' ? 'text-orange-500' : 'text-green-500'
+                                                }`}>
+                                                    {token.expires_at ? formatTime(token.expires_at) : t('user_token.never', { defaultValue: 'Never' })}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 rounded lowercase">
+                                                        {getExpiresLabel(token.expires_type)}
+                                                    </span>
+                                                    {token.expires_at && token.expires_at < Date.now() / 1000 && (
+                                                        <button
+                                                            onClick={() => handleRenew(token.id, token.expires_type)}
+                                                            className="text-xs text-blue-500 hover:underline font-medium"
+                                                        >
+                                                            {t('user_token.renew_button', { defaultValue: 'Renew' })}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </td>
+
+                                            {/* 用量与额度（核心列） */}
+                                            <td>
+                                                <div className="space-y-1.5 min-w-[180px]">
+                                                    {/* 累计用量 */}
+                                                    <div className="flex items-center justify-between whitespace-nowrap">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{token.total_requests}</span>
+                                                            <span className="text-xs text-gray-500 dark:text-gray-400">次请求</span>
+                                                        </div>
+                                                        <span className="text-lg font-bold text-gray-900 dark:text-white tabular-nums" title={`累计 ${token.total_tokens_used.toLocaleString()} tokens`}>
+                                                            {formatTokenCount(token.total_tokens_used)}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* 日额度进度条 */}
+                                                    {token.daily_quota > 0 && (
+                                                        <div
+                                                            title={`日额度：已用 ${token.daily_used.toLocaleString()} / 总额 ${token.daily_quota.toLocaleString()}，剩余 ${Math.max(0, token.daily_quota - token.daily_used).toLocaleString()}（${dailyPct.toFixed(1)}%）`}
+                                                        >
+                                                            <div className="flex items-center gap-1.5 mb-0.5">
+                                                                <span className="text-[10px] text-gray-700 dark:text-gray-300 w-10 whitespace-nowrap flex-shrink-0">日额度</span>
+                                                                <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all ${dailyPct >= 90 ? 'bg-red-500' : dailyPct >= 70 ? 'bg-orange-500' : 'bg-blue-500'}`}
+                                                                        style={{ width: `${dailyPct}%` }}
+                                                                    />
+                                                                </div>
+                                                                <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 tabular-nums w-24 text-right whitespace-nowrap flex-shrink-0">
+                                                                    {formatTokenCount(token.daily_used)}/{formatTokenCount(token.daily_quota)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* 月额度进度条 */}
+                                                    {token.monthly_quota > 0 && (
+                                                        <div
+                                                            title={`月额度：已用 ${token.monthly_used.toLocaleString()} / 总额 ${token.monthly_quota.toLocaleString()}，剩余 ${Math.max(0, token.monthly_quota - token.monthly_used).toLocaleString()}（${monthlyPct.toFixed(1)}%）`}
+                                                        >
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="text-[10px] text-gray-700 dark:text-gray-300 w-10 whitespace-nowrap flex-shrink-0">月额度</span>
+                                                                <div className="flex-1 h-1.5 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all ${monthlyPct >= 90 ? 'bg-red-500' : monthlyPct >= 70 ? 'bg-orange-500' : 'bg-purple-500'}`}
+                                                                        style={{ width: `${monthlyPct}%` }}
+                                                                    />
+                                                                </div>
+                                                                <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 tabular-nums w-24 text-right whitespace-nowrap flex-shrink-0">
+                                                                    {formatTokenCount(token.monthly_used)}/{formatTokenCount(token.monthly_quota)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* 无额度限制提示 */}
+                                                    {token.daily_quota === 0 && token.monthly_quota === 0 && (
+                                                        <div className="text-[10px] text-gray-400">无额度限制</div>
+                                                    )}
+                                                </div>
+                                            </td>
+
+                                            {/* 操作 */}
+                                            <td className="text-right" onClick={e => e.stopPropagation()}>
+                                                <div className="flex justify-end items-center gap-1">
+                                                    <button
+                                                        onClick={() => handleEdit(token)}
+                                                        className="p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
+                                                        title={t('common.edit', { defaultValue: 'Edit' })}
+                                                    >
+                                                        <Settings size={15} />
+                                                    </button>
+                                                    <div className="dropdown dropdown-end">
+                                                        <label tabIndex={0} className={`p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors cursor-pointer ${renewingId === token.id ? 'text-green-500' : 'text-gray-500 hover:text-green-500'}`}>
+                                                            <CalendarPlus size={15} className={renewingId === token.id ? 'animate-spin' : ''} />
+                                                        </label>
+                                                        <ul tabIndex={0} className="dropdown-content z-[10] menu p-2 shadow-xl bg-white dark:bg-base-100 rounded-xl w-32 border border-gray-100 dark:border-base-200 mt-1">
+                                                            <div className="px-3 py-1.5 text-xs font-bold text-gray-400 uppercase tracking-widest">{t('user_token.renew')}</div>
+                                                            <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'day')}>{t('user_token.expires_day', { defaultValue: '1 Day' })}</a></li>
+                                                            <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'week')}>{t('user_token.expires_week', { defaultValue: '1 Week' })}</a></li>
+                                                            <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'month')}>{t('user_token.expires_month', { defaultValue: '1 Month' })}</a></li>
+                                                        </ul>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => requestDelete(token)}
+                                                        className="p-1.5 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+                                                        title={t('common.delete', { defaultValue: 'Delete' })}
+                                                    >
+                                                        <Trash2 size={15} />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </motion.tr>
+
+                                        {/* 展开详情行（CSS Grid 平滑折叠动画，与流量/安全日志保持一致） */}
+                                        <tr className="border-none">
+                                            <td colSpan={6} className="p-0 border-none">
+                                                <div
+                                                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                                                        isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                                                    }`}
                                                 >
-                                                    {t('user_token.renew_button', { defaultValue: 'Renew' })}
-                                                </button>
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">{token.total_requests} <span className="text-xs font-normal text-gray-400">reqs</span></div>
-                                        <div className="text-xs text-gray-400 mt-0.5">
-                                            {(token.total_tokens_used / 1000).toFixed(1)}k tokens
-                                        </div>
-                                    </td>
-                                    <td>
-                                        {token.max_ips === 0
-                                            ? <span className="px-2 py-0.5 bg-gray-100 dark:bg-base-200 text-gray-500 text-xs rounded-full">{t('user_token.unlimited', { defaultValue: 'Unlimited' })}</span>
-                                            : <span className="px-2 py-0.5 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-xs font-medium rounded-full border border-orange-100 dark:border-orange-900/30">{token.max_ips} IPs</span>
-                                        }
-                                        {token.curfew_start && token.curfew_end && (
-                                            <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-1 bg-gray-50 dark:bg-base-200 w-fit px-1.5 py-0.5 rounded">
-                                                <Clock size={10} className="text-orange-500" />
-                                                <span>{token.curfew_start} - {token.curfew_end}</span>
-                                            </div>
-                                        )}
-                                        {(token.daily_quota > 0 || token.monthly_quota > 0) && (
-                                            <div className="mt-1.5 space-y-1">
-                                                {token.daily_quota > 0 && (() => {
-                                                    const pct = Math.min(100, (token.daily_used / token.daily_quota) * 100);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="text-xs text-gray-400 w-4">日</span>
-                                                            <div
-                                                                className="flex-1"
-                                                                title={`日额度：已用 ${token.daily_used.toLocaleString()} / 总额 ${token.daily_quota.toLocaleString()}，剩余 ${Math.max(0, token.daily_quota - token.daily_used).toLocaleString()}（${pct.toFixed(1)}%）`}
-                                                            >
-                                                                <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
-                                                                    <div
-                                                                        className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-500' : 'bg-blue-500'}`}
-                                                                        style={{ width: `${pct}%` }}
-                                                                    />
+                                                    <div className="overflow-hidden">
+                                                        {isRendered && (
+                                                            <div className="py-3 px-6 bg-gray-50 dark:bg-base-200/30 border-b border-gray-100 dark:border-base-300">
+                                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm pl-8">
+                                                                    {/* IP 限制 */}
+                                                                    <div>
+                                                                        <div className="text-xs text-gray-400 mb-1 flex items-center gap-1">
+                                                                            <Shield size={12} /> IP 限制
+                                                                        </div>
+                                                                        <div className="font-medium text-gray-700 dark:text-gray-300">
+                                                                            {token.max_ips === 0 ? '不限制' : `${token.max_ips} 个 IP`}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* 宵禁时间 */}
+                                                                    <div>
+                                                                        <div className="text-xs text-gray-400 mb-1 flex items-center gap-1">
+                                                                            <Clock size={12} /> 服务时间
+                                                                        </div>
+                                                                        <div className="font-medium text-gray-700 dark:text-gray-300">
+                                                                            {token.curfew_start && token.curfew_end
+                                                                                ? `${token.curfew_start} - ${token.curfew_end}（UTC+8）`
+                                                                                : '全天可用'}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* 创建时间 */}
+                                                                    <div>
+                                                                        <div className="text-xs text-gray-400 mb-1">创建时间</div>
+                                                                        <div className="font-medium text-gray-700 dark:text-gray-300">{formatTime(token.created_at)}</div>
+                                                                    </div>
+
+                                                                    {/* 最后使用 */}
+                                                                    <div>
+                                                                        <div className="text-xs text-gray-400 mb-1">最后使用</div>
+                                                                        <div className="font-medium text-gray-700 dark:text-gray-300">
+                                                                            {token.last_used_at ? formatTime(token.last_used_at) : '从未使用'}
+                                                                        </div>
+                                                                    </div>
                                                                 </div>
                                                             </div>
-                                                            <span className="text-xs text-gray-400 tabular-nums">{(token.daily_used / 1000).toFixed(1)}k/{(token.daily_quota / 1000).toFixed(1)}k</span>
-                                                        </div>
-                                                    );
-                                                })()}
-                                                {token.monthly_quota > 0 && (() => {
-                                                    const pct = Math.min(100, (token.monthly_used / token.monthly_quota) * 100);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="text-xs text-gray-400 w-4">月</span>
-                                                            <div
-                                                                className="flex-1"
-                                                                title={`月额度：已用 ${token.monthly_used.toLocaleString()} / 总额 ${token.monthly_quota.toLocaleString()}，剩余 ${Math.max(0, token.monthly_quota - token.monthly_used).toLocaleString()}（${pct.toFixed(1)}%）`}
-                                                            >
-                                                                <div className="h-2 bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden min-w-[40px]">
-                                                                    <div
-                                                                        className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-500' : 'bg-purple-500'}`}
-                                                                        style={{ width: `${pct}%` }}
-                                                                    />
-                                                                </div>
-                                                            </div>
-                                                            <span className="text-xs text-gray-400 tabular-nums">{(token.monthly_used / 1000).toFixed(1)}k/{(token.monthly_quota / 1000).toFixed(1)}k</span>
-                                                        </div>
-                                                    );
-                                                })()}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td className="text-sm text-gray-500">
-                                        {formatTime(token.created_at)}
-                                    </td>
-                                    <td className="text-right">
-                                        <div className="flex justify-end items-center gap-1">
-                                            <button
-                                                onClick={() => handleEdit(token)}
-                                                className="p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
-                                                title={t('common.edit', { defaultValue: 'Edit' })}
-                                            >
-                                                <Settings size={15} />
-                                            </button>
-                                            <div className="dropdown dropdown-end">
-                                                <label tabIndex={0} className={`p-1.5 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors cursor-pointer ${renewingId === token.id ? 'text-green-500' : 'text-gray-500 hover:text-green-500'}`}>
-                                                    <CalendarPlus size={15} className={renewingId === token.id ? 'animate-spin' : ''} />
-                                                </label>
-                                                <ul tabIndex={0} className="dropdown-content z-[10] menu p-2 shadow-xl bg-white dark:bg-base-100 rounded-xl w-32 border border-gray-100 dark:border-base-200 mt-1">
-                                                    <div className="px-3 py-1.5 text-xs font-bold text-gray-400 uppercase tracking-widest">{t('user_token.renew')}</div>
-                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'day')}>{t('user_token.expires_day', { defaultValue: '1 Day' })}</a></li>
-                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'week')}>{t('user_token.expires_week', { defaultValue: '1 Week' })}</a></li>
-                                                    <li><a className="text-sm py-2" onClick={() => handleRenew(token.id, 'month')}>{t('user_token.expires_month', { defaultValue: '1 Month' })}</a></li>
-                                                </ul>
-                                            </div>
-                                            <button
-                                                onClick={() => requestDelete(token)}
-                                                className="p-1.5 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
-                                                title={t('common.delete', { defaultValue: 'Delete' })}
-                                            >
-                                                <Trash2 size={15} />
-                                            </button>
-                                        </div>
-                                    </td>
-                                </motion.tr>
-                            ))}
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </React.Fragment>
+                                );
+                            })}
                         </AnimatePresence>
-                        {/* 骨架屏仅首次加载（无数据）时显示；刷新已有数据时行保留原位，内容原地更新 */}
-                        {loading && tokens.length === 0 && Array.from({ length: 4 }).map((_, i) => (
+
+                        {/* 骨架屏 */}
+                        {loading && filteredTokens.length === 0 && Array.from({ length: 4 }).map((_, i) => (
                             <tr key={`skeleton-${i}`} className="animate-pulse">
-                                {Array.from({ length: 7 }).map((__, j) => (
+                                {Array.from({ length: 6 }).map((__, j) => (
                                     <td key={j} className="py-4">
                                         <div
                                             className="h-4 bg-gray-200 dark:bg-base-300 rounded"
@@ -605,20 +817,38 @@ const UserToken: React.FC = () => {
                                 ))}
                             </tr>
                         ))}
-                        {tokens.length === 0 && !loading && (
+
+                        {/* 空状态 */}
+                        {filteredTokens.length === 0 && !loading && (
                             <tr>
-                                <td colSpan={7} className="py-20">
+                                <td colSpan={6} className="py-20">
                                     <div className="flex flex-col items-center justify-center text-gray-400 gap-3">
                                         <div className="p-4 bg-gray-50 dark:bg-base-200 rounded-full">
-                                            <Users size={40} className="opacity-20" />
+                                            {searchQuery || filterStatus !== 'all'
+                                                ? <Search size={40} className="opacity-20" />
+                                                : <Users size={40} className="opacity-20" />
+                                            }
                                         </div>
-                                        <p className="text-sm">{t('user_token.no_data', { defaultValue: 'No tokens found' })}</p>
-                                        <button
-                                            onClick={openCreateModal}
-                                            className="text-xs text-blue-500 hover:underline"
-                                        >
-                                            {t('user_token.create', { defaultValue: 'Create your first token' })}
-                                        </button>
+                                        <p className="text-sm">
+                                            {searchQuery || filterStatus !== 'all'
+                                                ? '没有找到匹配的 Token'
+                                                : t('user_token.no_data', { defaultValue: 'No tokens found' })}
+                                        </p>
+                                        {searchQuery || filterStatus !== 'all' ? (
+                                            <button
+                                                onClick={() => { setSearchQuery(''); setFilterStatus('all'); }}
+                                                className="text-xs text-blue-500 hover:underline"
+                                            >
+                                                清除筛选条件
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={openCreateModal}
+                                                className="text-xs text-blue-500 hover:underline"
+                                            >
+                                                {t('user_token.create', { defaultValue: 'Create your first token' })}
+                                            </button>
+                                        )}
                                     </div>
                                 </td>
                             </tr>
@@ -728,7 +958,6 @@ const UserToken: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Custom Expiration Time Picker */}
                         {newExpiresType === 'custom' && (
                             <div className="form-control w-full mb-3">
                                 <label className="label">

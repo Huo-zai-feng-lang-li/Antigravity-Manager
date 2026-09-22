@@ -1141,6 +1141,48 @@ pub async fn get_token_stats_summary(hours: i64) -> Result<TokenStatsSummary, St
 }
 
 #[tauri::command]
+pub async fn get_token_stats_today_summary() -> Result<TokenStatsSummary, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_summary())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_token_stats_today_hourly() -> Result<Vec<TokenStatsAggregated>, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_hourly_stats())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_token_stats_today_by_account() -> Result<Vec<AccountTokenStats>, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_account_stats())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_token_stats_today_by_model() -> Result<Vec<crate::modules::token_stats::ModelTokenStats>, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_model_stats())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_token_stats_today_model_trend() -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_model_trend_hourly())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_token_stats_today_account_trend() -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
+    tokio::task::spawn_blocking(move || crate::modules::token_stats::get_today_account_trend_hourly())
+        .await
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
 pub async fn get_token_stats_by_model(
     hours: i64,
 ) -> Result<Vec<crate::modules::token_stats::ModelTokenStats>, String> {

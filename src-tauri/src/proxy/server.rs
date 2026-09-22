@@ -899,6 +899,12 @@ impl AxumServer {
                 "/stats/token/account-trend/daily",
                 get(admin_get_token_stats_account_trend_daily),
             )
+            .route("/stats/token/today/hourly", get(admin_get_token_stats_today_hourly))
+            .route("/stats/token/today/summary", get(admin_get_token_stats_today_summary))
+            .route("/stats/token/today/by-account", get(admin_get_token_stats_today_by_account))
+            .route("/stats/token/today/by-model", get(admin_get_token_stats_today_by_model))
+            .route("/stats/token/today/model-trend", get(admin_get_token_stats_today_model_trend))
+            .route("/stats/token/today/account-trend", get(admin_get_token_stats_today_account_trend))
             .route("/accounts/bulk-delete", post(admin_delete_accounts))
             .route("/accounts/export", post(admin_export_accounts))
             .route("/accounts/reorder", post(admin_reorder_accounts))
@@ -2529,6 +2535,60 @@ async fn admin_get_token_stats_account_trend_daily(
     }
 }
 
+async fn admin_get_token_stats_today_hourly() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_hourly_stats()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
+async fn admin_get_token_stats_today_summary() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_summary()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
+async fn admin_get_token_stats_today_by_account() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_account_stats()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
+async fn admin_get_token_stats_today_by_model() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_model_stats()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
+async fn admin_get_token_stats_today_model_trend() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_model_trend_hourly()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
+async fn admin_get_token_stats_today_account_trend() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res = tokio::task::spawn_blocking(move || token_stats::get_today_account_trend_hourly()).await;
+    match res {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))),
+    }
+}
+
 async fn admin_clear_token_stats() -> impl IntoResponse {
     let res = tokio::task::spawn_blocking(|| {
         // Clear databases (brute force)
@@ -3733,7 +3793,12 @@ async fn admin_get_ip_geo(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let geo = crate::modules::geoip::query_single_ip(&query.ip)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e })))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
     Ok(Json(geo))
 }
 

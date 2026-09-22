@@ -98,3 +98,28 @@ export function formatCompactNumber(num: number): string {
     const formatted = value.toFixed(Math.abs(value) < 10 && i > 0 ? 1 : 0);
     return `${formatted.replace(/\.0$/, '')}${units[i]}`;
 }
+
+/**
+ * Token 数量格式化：中文万/亿智能切换
+ * - < 1000: 原始数字
+ * - 1000 ~ 9999: x.xk（千）
+ * - 1万 ~ 1亿以下: x.x万（保留1位小数，自动去尾零）
+ * - >= 1亿: x.xx亿（保留2位小数，自动去尾零）
+ *
+ * 示例：
+ *   500 → "500"
+ *   2500 → "2.5k"
+ *   1700000 → "170万"
+ *   6983000 → "698.3万"
+ *   50000000 → "5000万"
+ *   100000000 → "1亿"
+ *   107600000 → "1.08亿"
+ *   5000000000 → "50亿"
+ */
+export function formatTokenCount(num: number): string {
+    if (num === 0) return '0';
+    if (num < 1000) return num.toString();
+    if (num < 10000) return `${(num / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+    if (num < 100000000) return `${(num / 10000).toFixed(1).replace(/\.0$/, '')}万`;
+    return `${(num / 100000000).toFixed(2).replace(/\.?0+$/, '')}亿`;
+}

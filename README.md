@@ -126,6 +126,115 @@ graph TD
     ResponseMapper --> Client
 ```
 
+## 🛠️ 本地开发指南 (Development)
+
+### 环境要求
+
+- **Node.js** >= 18（推荐 20+）
+- **Rust** stable 工具链（通过 rustup 安装）
+- **Windows** / **macOS** / **Linux**
+
+> **注意**：如果 `cargo` 命令找不到，需手动将 Rust 工具链加入 PATH：
+> ```powershell
+> # 默认安装在用户目录（C 盘）
+> $env:PATH = "C:\Users\<你的用户名>\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin;$env:PATH"
+>
+> # 若已将 rustup 迁移到 D 盘（推荐，节省 C 盘空间）
+> $env:PATH = "D:\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin;$env:PATH"
+> ```
+>
+> **将 rustup/cargo 迁移到 D 盘**（释放 C 盘空间，约 4-5 GB）：
+> ```powershell
+> # 1. 创建目录并设置环境变量（永久生效）
+> New-Item -ItemType Directory -Path "D:\.rustup", "D:\.cargo" -Force
+> [Environment]::SetEnvironmentVariable("RUSTUP_HOME", "D:\.rustup", "User")
+> [Environment]::SetEnvironmentVariable("CARGO_HOME", "D:\.cargo", "User")
+>
+> # 2. 复制现有数据到 D 盘
+> robocopy "C:\Users\<你的用户名>\.rustup" "D:\.rustup" /MIR /MT:16 /NFL /NDL
+>
+> # 3. 验证 D 盘 cargo 可用后，删除 C 盘旧数据
+> Remove-Item "C:\Users\<你的用户名>\.rustup" -Recurse -Force
+> ```
+
+### 安装依赖
+
+```bash
+npm install
+```
+
+### 启动开发模式（推荐）
+
+```bash
+npm run tauri dev
+```
+
+- 首次编译约 **3-5 分钟**（Rust 依赖较多）
+- 后续增量编译约 **10-60 秒**
+- 前端支持 Vite 热更新（HMR），修改前端代码无需重启
+- 修改 Rust 代码后自动重新编译并重启应用
+
+### 快速启动（已编译过）
+
+如果之前已经编译过，可分开启动以加快速度：
+
+```bash
+# 终端 1：启动前端热更新服务
+npm run dev
+
+# 终端 2：直接运行已编译的后端（无需重新编译）
+# Windows
+src-tauri\target\debug\antigravity-tools.exe
+# macOS / Linux
+./src-tauri/target/debug/antigravity-tools
+```
+
+前端访问地址：`http://localhost:1420/`
+
+### 停止应用
+
+- **正常停止**：直接关闭应用窗口
+- **命令行停止**：在启动终端按 `Ctrl+C`
+- **强制停止**：任务管理器结束 `Antigravity` 和 `node` 进程
+  ```powershell
+  # Windows 一键结束
+  Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue | Stop-Process -Force
+  ```
+
+### 生产构建
+
+```bash
+npm run tauri build
+```
+
+构建产物位于 `src-tauri/target/release/` 及 `src-tauri/target/release/bundle/`。
+
+> **💡 开发测试 vs 发布构建**：
+> - 只改前端（React/TS/CSS）：`npm run dev` + 运行已有 exe，Vite 热更新，刷新页面即生效。
+> - 改了 Rust 后端：`npm run tauri dev`，自动重新编译并重启应用。
+> - **GitHub Actions 构建仅用于正式发布**（打 Tag 时触发），日常开发自测不需要等待。
+> - 简单说：**开发自测用本地，发版给用户用 GitHub 构建**。
+
+### 常见问题
+
+**Q: 提示 `cargo` 命令找不到？**
+A: 见上方"环境要求"，将 Rust 工具链加入 PATH。
+
+**Q: 提示端口 1420 被占用？**
+A: 结束占用端口的进程后重试：
+```powershell
+# Windows
+$proc = Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue
+if ($proc) { Stop-Process -Id $proc.OwningProcess -Force }
+```
+
+**Q: 编译产物占用磁盘空间太大？**
+A: Rust debug 编译产物约 **3-5GB**，位于 `src-tauri/target/`。如需清理：
+```bash
+cd src-tauri && cargo clean
+```
+清理后下次启动需重新全量编译（约 3-5 分钟）。
+
 ##  安装指南 (Installation)
 
 ### 选项 A: 终端安装 (推荐)

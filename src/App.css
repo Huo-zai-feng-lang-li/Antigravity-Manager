@@ -190,3 +190,19 @@ a {
 .textarea.textarea-error {
   border: 1px solid var(--color-error);
 }
+
+/* 页面卡片/列表项入场甩尾动画（与 UserToken 列表 stagger 一致） */
+@keyframes fade-slide-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.stagger-item {
+  animation: fade-slide-in 0.35s ease-out both;
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.stagger-item-left {
+  animation: slide-in-left 0.3s ease-out both;
+}

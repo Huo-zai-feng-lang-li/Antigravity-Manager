@@ -808,6 +808,7 @@ pub async fn monitor_middleware(
                             .or(json.get("usageMetadata"))
                             .or(json.get("response").and_then(|r| r.get("usage")))
                             .or(json.get("response").and_then(|r| r.get("usageMetadata")))
+                            .or(json.get("message").and_then(|m| m.get("usage")))
                         {
                             log.input_tokens = extract_input_tokens(usage);
                             log.output_tokens = extract_output_tokens(usage);
@@ -945,6 +946,7 @@ pub async fn monitor_middleware(
                                     .or(json.get("usageMetadata"))
                                     .or(json.get("response").and_then(|r| r.get("usage")))
                                     .or(json.get("response").and_then(|r| r.get("usageMetadata")))
+                                    .or(json.get("message").and_then(|m| m.get("usage")))
                                 {
                                     log.input_tokens = extract_input_tokens(usage);
                                     log.output_tokens = extract_output_tokens(usage);
@@ -997,6 +999,7 @@ pub async fn monitor_middleware(
                             .or(json.get("usageMetadata"))
                             .or(json.get("response").and_then(|r| r.get("usage")))
                             .or(json.get("response").and_then(|r| r.get("usageMetadata")))
+                            .or(json.get("message").and_then(|m| m.get("usage")))
                         {
                             log.input_tokens = extract_input_tokens(usage);
                             log.output_tokens = extract_output_tokens(usage);

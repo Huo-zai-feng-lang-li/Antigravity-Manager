@@ -206,9 +206,9 @@ function Dashboard() {
 
                 {/* 统计卡片 - 5 columns on medium screens and up */}
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
+                    <div className="bg-gradient-to-br from-blue-50/50 to-white dark:from-blue-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-blue-100 dark:border-blue-900/30 hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-md">
+                            <div className="p-1.5 bg-blue-100/50 dark:bg-blue-900/30 rounded-md">
                                 <Users className="w-4 h-4 text-blue-500 dark:text-blue-400" />
                             </div>
                         </div>
@@ -216,9 +216,9 @@ function Dashboard() {
                         <div className="text-xs text-gray-500 dark:text-gray-400">{t('dashboard.total_accounts')}</div>
                     </div>
 
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
+                    <div className="bg-gradient-to-br from-green-50/50 to-white dark:from-green-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-green-100 dark:border-green-900/30 hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-green-50 dark:bg-green-900/20 rounded-md">
+                            <div className="p-1.5 bg-green-100/50 dark:bg-green-900/30 rounded-md">
                                 <Sparkles className="w-4 h-4 text-green-500 dark:text-green-400" />
                             </div>
                         </div>
@@ -231,9 +231,9 @@ function Dashboard() {
                         )}
                     </div>
 
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
+                    <div className="bg-gradient-to-br from-purple-50/50 to-white dark:from-purple-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-purple-100 dark:border-purple-900/30 hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-purple-50 dark:bg-purple-900/20 rounded-md">
+                            <div className="p-1.5 bg-purple-100/50 dark:bg-purple-900/30 rounded-md">
                                 <Sparkles className="w-4 h-4 text-purple-500 dark:text-purple-400" />
                             </div>
                         </div>
@@ -246,9 +246,9 @@ function Dashboard() {
                         )}
                     </div>
 
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
+                    <div className="bg-gradient-to-br from-cyan-50/50 to-white dark:from-cyan-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-cyan-100 dark:border-cyan-900/30 hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-cyan-50 dark:bg-cyan-900/20 rounded-md">
+                            <div className="p-1.5 bg-cyan-100/50 dark:bg-cyan-900/30 rounded-md">
                                 <Bot className="w-4 h-4 text-cyan-500 dark:text-cyan-400" />
                             </div>
                         </div>
@@ -261,9 +261,9 @@ function Dashboard() {
                         )}
                     </div>
 
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
+                    <div className="bg-gradient-to-br from-orange-50/50 to-white dark:from-orange-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-orange-100 dark:border-orange-900/30 hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-orange-50 dark:bg-orange-900/20 rounded-md">
+                            <div className="p-1.5 bg-orange-100/50 dark:bg-orange-900/30 rounded-md">
                                 <AlertTriangle className="w-4 h-4 text-orange-500 dark:text-orange-400" />
                             </div>
                         </div>

@@ -3,8 +3,10 @@ import { request as invoke } from '../utils/request';
 import { parseTokenStatsTimeRange, setStoredTokenStatsTimeRange, type TokenStatsTimeRange } from '../utils/tokenStats';
 import { useTranslation } from 'react-i18next';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Clock, Calendar, CalendarDays, Users, Zap, TrendingUp, RefreshCw, Cpu } from 'lucide-react';
+import { Clock, Calendar, CalendarDays, Users, Zap, TrendingUp, RefreshCw, Cpu, Sun } from 'lucide-react';
+import HelpTooltip from '../components/common/HelpTooltip';
 import { useSearchParams } from 'react-router-dom';
+import { formatTokenCount } from '../utils/format';
 
 interface TokenStatsAggregated {
     period: string;
@@ -63,11 +65,7 @@ const MODEL_COLORS = [
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#f43f5e'];
 
-const formatNumber = (num: number): string => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
-};
+const formatNumber = formatTokenCount;
 
 const shortenModelName = (model: string): string => {
     return model
@@ -80,7 +78,7 @@ const shortenModelName = (model: string): string => {
 const TokenStats: React.FC = () => {
     const { t } = useTranslation();
     const [searchParams, setSearchParams] = useSearchParams();
-    const timeRange: TokenStatsTimeRange = parseTokenStatsTimeRange(searchParams.get('range'));
+    const [timeRange, setTimeRangeState] = useState<TokenStatsTimeRange>(() => parseTokenStatsTimeRange(searchParams.get('range')));
     const [viewMode, setViewMode] = useState<ViewMode>('model');
     const [chartData, setChartData] = useState<TokenStatsAggregated[]>([]);
     const [accountData, setAccountData] = useState<AccountTokenStats[]>([]);
@@ -91,14 +89,19 @@ const TokenStats: React.FC = () => {
     const [allAccounts, setAllAccounts] = useState<string[]>([]);
     const [summary, setSummary] = useState<TokenStatsSummary | null>(null);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const fetchIdRef = useRef(0);
 
     const setTimeRange = (range: TokenStatsTimeRange) => {
+        setTimeRangeState(range);
         setStoredTokenStatsTimeRange(range);
         const nextParams = new URLSearchParams(searchParams);
         nextParams.set('range', range);
         setSearchParams(nextParams, { replace: true });
+        // 直接触发数据刷新，不依赖 useEffect 闭包
+        fetchData(range);
     };
 
     // Ensure URL search params reflect the stored preference if missing
@@ -111,16 +114,24 @@ const TokenStats: React.FC = () => {
         }
     }, []);
 
-    const fetchData = async () => {
+    const fetchData = async (range?: TokenStatsTimeRange) => {
+        const targetRange = range || timeRange;
         const currentFetchId = ++fetchIdRef.current;
         setLoading(true);
+        const startTime = Date.now();
         try {
             let hours = 24;
             let statsPromise: Promise<TokenStatsAggregated[]>;
             let modelTrendPromise: Promise<ModelTrendPoint[]>;
             let accountTrendPromise: Promise<AccountTrendPoint[]>;
 
-            switch (timeRange) {
+            switch (targetRange) {
+                case 'today':
+                    hours = 24;
+                    statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_today_hourly', {});
+                    modelTrendPromise = invoke<ModelTrendPoint[]>('get_token_stats_today_model_trend', {});
+                    accountTrendPromise = invoke<AccountTrendPoint[]>('get_token_stats_today_account_trend', {});
+                    break;
                 case 'hourly':
                     hours = 1;
                     statsPromise = invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 1 });
@@ -141,13 +152,23 @@ const TokenStats: React.FC = () => {
                     break;
             }
 
+            const accountPromise = targetRange === 'today'
+                ? invoke<AccountTokenStats[]>('get_token_stats_today_by_account', {})
+                : invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours });
+            const modelPromise = targetRange === 'today'
+                ? invoke<ModelTokenStats[]>('get_token_stats_today_by_model', {})
+                : invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours });
+            const summaryPromise = targetRange === 'today'
+                ? invoke<TokenStatsSummary>('get_token_stats_today_summary', {})
+                : invoke<TokenStatsSummary>('get_token_stats_summary', { hours });
+
             const [data, modelTrend, accountTrend, accounts, models_stats, summaryData] = await Promise.all([
                 statsPromise,
                 modelTrendPromise,
                 accountTrendPromise,
-                invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours }),
-                invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours }),
-                invoke<TokenStatsSummary>('get_token_stats_summary', { hours })
+                accountPromise,
+                modelPromise,
+                summaryPromise
             ]);
 
             // Prevent race condition: discard if another request was triggered afterwards
@@ -202,13 +223,25 @@ const TokenStats: React.FC = () => {
         } finally {
             if (currentFetchId === fetchIdRef.current) {
                 setLoading(false);
+                // 刷新按钮的独立 loading：至少持续 1000ms，确保动画可见
+                if (refreshing) {
+                    const elapsed = Date.now() - startTime;
+                    const remaining = Math.max(0, 1000 - elapsed);
+                    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+                    refreshTimerRef.current = setTimeout(() => {
+                        setRefreshing(false);
+                        refreshTimerRef.current = null;
+                    }, remaining);
+                }
             }
         }
     };
 
+    // 初始加载一次数据；后续切换时间范围由 setTimeRange 直接触发 fetchData
     useEffect(() => {
         fetchData();
-    }, [timeRange]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const pieData = React.useMemo(() => {
         return accountData.slice(0, 8).map((account, index) => ({
@@ -277,8 +310,8 @@ const TokenStats: React.FC = () => {
         const sortedPayload = [...payload].sort((a: any, b: any) => b.value - a.value);
 
         return (
-            <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 text-xs z-[100] min-w-[180px] pointer-events-none">
-                <p className="font-semibold text-gray-700 dark:text-gray-200 mb-1.5 border-b border-gray-100 dark:border-gray-700 pb-1.5">
+            <div className="bg-white/95 dark:bg-base-200/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-base-300 text-xs z-[100] min-w-[180px] pointer-events-none">
+                <p className="font-semibold text-gray-700 dark:text-gray-200 mb-1.5 border-b border-gray-100 dark:border-base-300 pb-1.5">
                     {label}
                 </p>
                 <div className="max-h-[180px] overflow-y-auto space-y-1 pr-1.5 scrollbar-thin scrollbar-thumb-gray-200 dark:scrollbar-thumb-gray-700">
@@ -314,7 +347,7 @@ const TokenStats: React.FC = () => {
             { label: t('token_stats.output', '输出'), value: row.total_output_tokens || 0, color: '#8b5cf6' },
         ];
         return (
-            <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 text-xs z-[100] pointer-events-none min-w-[170px]">
+            <div className="bg-white/95 dark:bg-base-200/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-base-300 text-xs z-[100] pointer-events-none min-w-[170px]">
                 {label && <p className="font-semibold text-gray-700 dark:text-gray-200 mb-2">{label}</p>}
                 <div className="space-y-1">
                     {items.map((item) => (
@@ -330,7 +363,7 @@ const TokenStats: React.FC = () => {
                             </span>
                         </div>
                     ))}
-                    <div className="flex items-center justify-between gap-4 pt-1 border-t border-gray-100 dark:border-gray-700">
+                    <div className="flex items-center justify-between gap-4 pt-1 border-t border-gray-100 dark:border-base-300">
                         <span className="text-gray-500 dark:text-gray-400">
                             {t('token_stats.requests', '请求数')}:
                         </span>
@@ -348,7 +381,7 @@ const TokenStats: React.FC = () => {
         if (!active || !payload || !payload.length) return null;
         const entry = payload[0];
         return (
-            <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 text-xs z-[100] pointer-events-none">
+            <div className="bg-white/95 dark:bg-base-200/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-base-300 text-xs z-[100] pointer-events-none">
                 <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.payload.color || entry.color }} />
                     <span className="text-gray-500 dark:text-gray-400">
@@ -362,6 +395,10 @@ const TokenStats: React.FC = () => {
         );
     };
 
+    // 趋势图数据项与配色（供 defs 渐变与 Area 共用，避免重复三元）
+    const trendItems = viewMode === 'model' ? allModels : allAccounts;
+    const trendPalette = viewMode === 'model' ? MODEL_COLORS : COLORS;
+
     return (
         <div className="h-full w-full overflow-y-auto">
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
@@ -369,9 +406,24 @@ const TokenStats: React.FC = () => {
                     <h1 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
                         <Zap className="w-6 h-6 text-blue-500" />
                         {t('token_stats.title', 'Token 消费统计')}
+                        <HelpTooltip
+                            text="数据统计口径：小时=过去1小时滚动，日=过去24小时滚动，周=过去7天滚动，今日=今天00:00至今（自然日）。总Token=输入+输出，不含缓存命中。"
+                            placement="bottom"
+                            iconSize={16}
+                        />
                     </h1>
                     <div className="flex items-center gap-2">
                         <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                            <button
+                                onClick={() => setTimeRange('today')}
+                                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${timeRange === 'today'
+                                    ? 'bg-white dark:bg-gray-700 text-blue-600 shadow-sm'
+                                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-800'
+                                    }`}
+                            >
+                                <Sun className="w-4 h-4" />
+                                {t('token_stats.today', '今日')}
+                            </button>
                             <button
                                 onClick={() => setTimeRange('hourly')}
                                 className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${timeRange === 'hourly'
@@ -404,18 +456,27 @@ const TokenStats: React.FC = () => {
                             </button>
                         </div>
                         <button
-                            onClick={fetchData}
-                            disabled={loading}
-                            className="p-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors disabled:opacity-50"
+                            onClick={() => {
+                                if (refreshing) return;
+                                if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+                                setRefreshing(true);
+                                fetchData();
+                            }}
+                            disabled={refreshing}
+                            className={`p-2 rounded-lg text-white transition-all ${refreshing
+                                ? 'bg-blue-700 cursor-wait scale-95'
+                                : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
+                                }`}
+                            title={refreshing ? '刷新中...' : '刷新数据'}
                         >
-                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
                         </button>
                     </div>
                 </div>
 
                 {summary && (
                     <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 transition-opacity duration-200 ${loading ? 'opacity-70' : 'opacity-100'}`}>
-                        <div className="bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
+                        <div className="bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-base-300 hover:shadow-md transition-shadow">
                             <div className="flex items-center justify-between gap-2 text-gray-500 dark:text-gray-400 text-sm mb-2">
                                 <div className="flex items-center gap-2">
                                     <div className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700">
@@ -496,7 +557,7 @@ const TokenStats: React.FC = () => {
                     </div>
                 )}
 
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+                <div key={`trend-${timeRange}`} className="bg-white dark:bg-base-100 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-base-200 hover:shadow-md transition-shadow duration-300">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
                             {viewMode === 'model' ? (
@@ -538,7 +599,18 @@ const TokenStats: React.FC = () => {
                                     onMouseMove={handleTrendChartMouseMove}
                                     onMouseLeave={() => setTooltipPosition(undefined)}
                                 >
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#374151" strokeOpacity={0.15} />
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#94a3b8" strokeOpacity={0.12} />
+                                    <defs>
+                                        {trendItems.map((item, index) => {
+                                            const c = trendPalette[index % trendPalette.length];
+                                            return (
+                                                <linearGradient key={`grad-${item}`} id={`trend-grad-${index}`} x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="0%" stopColor={c} stopOpacity={0.75} />
+                                                    <stop offset="100%" stopColor={c} stopOpacity={0.05} />
+                                                </linearGradient>
+                                            );
+                                        })}
+                                    </defs>
                                     <XAxis
                                         dataKey="period"
                                         tick={{ fontSize: 11, fill: '#6b7280' }}
@@ -573,15 +645,15 @@ const TokenStats: React.FC = () => {
                                             zIndex: 0
                                         }}
                                     />
-                                    {(viewMode === 'model' ? allModels : allAccounts).map((item, index) => (
+                                    {trendItems.map((item, index) => (
                                         <Area
                                             key={item}
                                             type="monotone"
                                             dataKey={item}
                                             stackId="1"
-                                            stroke={viewMode === 'model' ? MODEL_COLORS[index % MODEL_COLORS.length] : COLORS[index % COLORS.length]}
-                                            fill={viewMode === 'model' ? MODEL_COLORS[index % MODEL_COLORS.length] : COLORS[index % COLORS.length]}
-                                            fillOpacity={0.6}
+                                            stroke={trendPalette[index % trendPalette.length]}
+                                            strokeWidth={1.5}
+                                            fill={`url(#trend-grad-${index})`}
                                         />
                                     ))}
                                 </AreaChart>
@@ -595,15 +667,29 @@ const TokenStats: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
-                        <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                    <div key={`usage-${timeRange}`} className="lg:col-span-2 bg-white dark:bg-base-100 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-base-200 flex flex-col hover:shadow-md transition-shadow duration-300">
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content mb-4">
                             {t('token_stats.usage_trend', 'Token 使用趋势')}
                         </h2>
                         <div className="flex-1 min-h-[16rem]">
                             {chartData.length > 0 ? (
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={chartData}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#374151" strokeOpacity={0.15} />
+                                    <BarChart data={chartData} barCategoryGap="30%" margin={{ top: 8 }}>
+                                        <defs>
+                                            <linearGradient id="barCached" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="0%" stopColor="#93c5fd" stopOpacity={0.9} />
+                                                <stop offset="100%" stopColor="#60a5fa" stopOpacity={0.7} />
+                                            </linearGradient>
+                                            <linearGradient id="barInput" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="0%" stopColor="#3b82f6" />
+                                                <stop offset="100%" stopColor="#1d4ed8" stopOpacity={0.85} />
+                                            </linearGradient>
+                                            <linearGradient id="barOutput" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="0%" stopColor="#8b5cf6" />
+                                                <stop offset="100%" stopColor="#6d28d9" stopOpacity={0.85} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#94a3b8" strokeOpacity={0.12} />
                                         <XAxis
                                             dataKey="period"
                                             tick={{ fontSize: 11, fill: '#6b7280' }}
@@ -628,9 +714,16 @@ const TokenStats: React.FC = () => {
                                             allowEscapeViewBox={{ x: true, y: true }}
                                             wrapperStyle={{ zIndex: 100 }}
                                         />
-                                        <Bar dataKey="total_cached_tokens" name={t('token_stats.cached_token', '缓存命中')} stackId="input" fill="#93c5fd" radius={[0, 0, 4, 4]} maxBarSize={50} />
-                                        <Bar dataKey="uncached_input_tokens" name={t('token_stats.input', '输入')} stackId="input" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                                        <Bar dataKey="total_output_tokens" name={t('token_stats.output', '输出')} fill="#8b5cf6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                        <Legend
+                                            verticalAlign="top"
+                                            height={32}
+                                            iconType="circle"
+                                            iconSize={8}
+                                            wrapperStyle={{ fontSize: '12px', paddingBottom: '8px' }}
+                                        />
+                                        <Bar dataKey="total_cached_tokens" name={t('token_stats.cached_token', '缓存命中')} stackId="input" fill="url(#barCached)" radius={[0, 0, 6, 6]} maxBarSize={48} animationDuration={800} animationEasing="ease-out" />
+                                        <Bar dataKey="uncached_input_tokens" name={t('token_stats.input', '输入')} stackId="input" fill="url(#barInput)" radius={[6, 6, 0, 0]} maxBarSize={48} animationDuration={800} animationEasing="ease-out" />
+                                        <Bar dataKey="total_output_tokens" name={t('token_stats.output', '输出')} fill="url(#barOutput)" radius={[6, 6, 6, 6]} maxBarSize={48} animationDuration={800} animationEasing="ease-out" />
                                     </BarChart>
                                 </ResponsiveContainer>
                             ) : (
@@ -641,12 +734,13 @@ const TokenStats: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-                        <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                    <div key={`pie-${timeRange}`} className="bg-white dark:bg-base-100 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-base-200 hover:shadow-md transition-shadow duration-300">
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content mb-4">
                             {t('token_stats.by_account', '分账号统计')}
                         </h2>
-                        <div className="h-48" ref={pieChartContainerRef}>
+                        <div className="h-52 relative" ref={pieChartContainerRef}>
                             {pieData.length > 0 ? (
+                                <>
                                 <ResponsiveContainer width="100%" height="100%">
                                     <PieChart
                                         onMouseMove={handlePieChartMouseMove}
@@ -656,10 +750,13 @@ const TokenStats: React.FC = () => {
                                             data={pieData}
                                             cx="50%"
                                             cy="50%"
-                                            innerRadius={40}
-                                            outerRadius={70}
-                                            paddingAngle={2}
+                                            innerRadius={48}
+                                            outerRadius={78}
+                                            paddingAngle={3}
                                             dataKey="value"
+                                            stroke="none"
+                                            animationDuration={800}
+                                            animationEasing="ease-out"
                                         >
                                             {pieData.map((entry, index) => (
                                                 <Cell key={`cell-${index}`} fill={entry.color} />
@@ -673,27 +770,41 @@ const TokenStats: React.FC = () => {
                                         />
                                     </PieChart>
                                 </ResponsiveContainer>
+                                {pieData.length > 0 && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                        <span className="text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-wider">总计</span>
+                                        <span className="text-lg font-bold text-gray-800 dark:text-base-content tabular-nums">
+                                            {formatNumber(pieData.reduce((sum: number, item: any) => sum + item.value, 0))}
+                                        </span>
+                                    </div>
+                                )}
+                                </>
                             ) : (
                                 <div className="h-full flex items-center justify-center text-gray-400">
                                     {loading ? t('common.loading', '加载中...') : t('token_stats.no_data', '暂无数据')}
                                 </div>
                             )}
                         </div>
-                        <div className="mt-4 space-y-2 max-h-32 overflow-y-auto">
+                        <div className="mt-4 space-y-2.5 max-h-40 overflow-y-auto pr-1">
                             {accountData.slice(0, 5).map((account, index) => (
-                                <div key={account.account_email} className="flex items-center justify-between text-sm">
-                                    <div className="flex items-center gap-2">
+                                <div key={account.account_email} className="flex items-center justify-between text-sm group">
+                                    <div className="flex items-center gap-2 min-w-0">
                                         <div
-                                            className="w-3 h-3 rounded-full"
+                                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                                             style={{ backgroundColor: COLORS[index % COLORS.length] }}
                                         />
-                                        <span className="text-gray-600 dark:text-gray-300 truncate max-w-[120px]">
+                                        <span className="text-gray-600 dark:text-gray-300 truncate max-w-[140px]" title={account.account_email}>
                                             {account.account_email.split('@')[0]}
                                         </span>
                                     </div>
-                                    <span className="font-medium text-gray-800 dark:text-white">
-                                        {formatNumber(account.total_tokens)}
-                                    </span>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                        <span className="text-[10px] text-gray-400">
+                                            {summary ? ((account.total_tokens / summary.total_tokens) * 100).toFixed(1) : '0'}%
+                                        </span>
+                                        <span className="font-medium text-gray-800 dark:text-white tabular-nums">
+                                            {formatNumber(account.total_tokens)}
+                                        </span>
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -703,15 +814,15 @@ const TokenStats: React.FC = () => {
 
                 {
                     modelData.length > 0 && viewMode === 'model' && (
-                        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-                            <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                        <div className="bg-white dark:bg-base-100 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-base-200 hover:shadow-md transition-shadow duration-300">
+                            <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content mb-4 flex items-center gap-2">
                                 <Cpu className="w-5 h-5 text-blue-500" />
                                 {t('token_stats.model_details', '分模型详细统计')}
                             </h2>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
-                                        <tr className="border-b border-gray-200 dark:border-gray-700">
+                                        <tr className="border-b border-gray-200 dark:border-base-300">
                                             <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
                                                 {t('token_stats.model', '模型')}
                                             </th>
@@ -741,7 +852,7 @@ const TokenStats: React.FC = () => {
                                             return (
                                                 <tr
                                                     key={model.model}
-                                                    className="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                                                    className="border-b border-gray-100 dark:border-base-300/50 hover:bg-gray-50 dark:hover:bg-gray-700/30"
                                                 >
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center gap-2">
@@ -799,14 +910,14 @@ const TokenStats: React.FC = () => {
 
                 {
                     accountData.length > 0 && viewMode === 'account' && (
-                        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-                            <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                        <div className="bg-white dark:bg-base-100 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-base-200 hover:shadow-md transition-shadow duration-300">
+                            <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content mb-4">
                                 {t('token_stats.account_details', '账号详细统计')}
                             </h2>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
-                                        <tr className="border-b border-gray-200 dark:border-gray-700">
+                                        <tr className="border-b border-gray-200 dark:border-base-300">
                                             <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
                                                 {t('token_stats.account', '账号')}
                                             </th>
@@ -831,7 +942,7 @@ const TokenStats: React.FC = () => {
                                         {accountData.map((account) => (
                                             <tr
                                                 key={account.account_email}
-                                                className="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                                                className="border-b border-gray-100 dark:border-base-300/50 hover:bg-gray-50 dark:hover:bg-gray-700/30"
                                             >
                                                 <td className="py-3 px-4 text-gray-800 dark:text-white">
                                                     {account.account_email}

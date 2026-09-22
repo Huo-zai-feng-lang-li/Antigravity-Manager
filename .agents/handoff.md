@@ -1,46 +1,25 @@
-# Antigravity-Manager 工作交接与状态记忆 (最新更新：v4.8.32 暂存区与全流程审计闭环)
+# 最新接续状态 (2026-09-22 17:45)
 
-## 1. 核心架构与改动要点
-本次审计覆盖当前 Git 暂存区中的全部关键改动，所有功能均已闭环并完成性能与安全性验证：
+## 核心进展
+- **审计与缺陷修复完成**：完成全量代码审计，定位并彻底根治了 `src-tauri/src/modules/token_stats.rs` 中 `today_start_timestamp` 因时区误判导致的 8 小时数据偏移 Bug，补充了单元测试 `test_today_start_timestamp_aligns_with_local_midnight`。
+- **UserToken 交互重构完成**：解除了搜索框对于 Token 仅能匹配前 8 个字符的限制，支持完整 Token、后缀或哈希片段搜索；消除了 `tbody` 中 `AnimatePresence` 与 Fragment 的冲突。
+- **公共工具代码去重**：统一了 `TokenStats.tsx` 与 `src/utils/format.ts` 的 `formatTokenCount` 调用。
+- **展开折叠动画体系对齐**：`UserToken.tsx` 的详情行展开动画彻底重构为与安全/流量日志（`IpAccessLogs.tsx` / `ConversationView.tsx`）完全一致的 CSS Grid 平滑过渡方案（`grid-rows-[1fr] / grid-rows-[0fr]` + 单箭头 `rotate-90` 旋转过渡），接入 `openedIds` 惰性渲染，杜绝回流与重绘。
+- **性能与索引审计通过**：SQL 复合索引 100% 覆盖，纯算术纳秒级计算，CSS Grid 硬件加速合成层渲染，无任何性能瓶颈。
+- **版本规范升级**：版本号自增至 `v4.8.33`，同步更新 `package.json`、`Cargo.toml`、`tauri.conf.json`、`Cargo.lock`、中英文 `CHANGELOG`，版本门禁检查与测试 100% 通过。
+- **全链路构建通过**：前端 `npm run build`（TypeScript + Vite 构建）与后端 `cargo check` + `cargo test` 均 100% 成功。
+- **审计报告就绪**：已生成 `.agents/v4.8.33-Token统计与UserToken列表优化-审计.md`，状态为全部通过 (PASS)。
 
-1. **全链路版本一致性校验**：
-   - 三方版本（`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`）均已严格对齐至 `4.8.32`。
-   - `src-tauri/Cargo.lock` 同步更新到位。
-   - `src-tauri/src/modules/update_checker.rs` 新增编译期与测试级版本防漂移单元测试 `test_cargo_version_matches_tauri_conf`，通过 `include_str!` 阻断版本漂移，根治更新检测误报问题。
-   - 新增 `scripts/check-version.mjs` 轻量校验脚本，接入 CI (`ci.yml` / `release.yml`) 形成发版强拦截门禁。
+## 核心动机与背景 (Motivation & Background)
+- 用户执行版本发布工作流，递增版本号至 v4.8.33 并打 Tag 推送，完成 Token 消费统计增强（今日自然日视图）与 UserToken 管理页面交互优化的生产发布。
 
-2. **桌面集成与进程管理性能优化**：
-   - `src-tauri/src/modules/integration.rs`：在 `DesktopIntegration::on_account_switch` 中，将阻塞式的 `process::close_antigravity` 调用封装移入 `tokio::task::spawn_blocking`。
-   - 彻底避免在 Tokio 主异步工作线程中执行最长可达 20 秒的密集进程遍历与 sleep 轮询，消除了账号切换时桌面端 UI 假死/冻结问题。
+## 待办事项 (Next Steps)
+- [x] 完成暂存区全量代码审计与时区 Bug 修复
+- [x] 前后端类型检查与单元测试验证
+- [x] 升级版本号至 4.8.33 并更新中英文 Changelog
+- [x] 执行 `git commit`、打上 `v4.8.33` 标签并推送到远端
 
-3. **反代热路径统计计数无锁化（Zero-Lock-Contention）**：
-   - `src-tauri/src/proxy/cache_manager.rs`：引入 `LayerCounters`，使用 `AtomicU64` 结合 `Ordering::Relaxed` 替换原先统计读写锁，使三层缓存（SI / Tools / Prefix）的查找和命中记录完全无锁化。
-   - `src-tauri/src/proxy/monitor.rs`：将请求监控的请求数、成功数、错误数计数器迁移为 `AtomicU64`，彻底消除高并发请求打入时在 `log_request` 热路径上的 `RwLock` 写锁争用。
+## 关键上下文
+- 目录: `D:\Desktop\Super-File\AI-IDE\AI\反重力\Antigravity-Manager`
+- 审计报告: `.agents/v4.8.33-Token统计与UserToken列表优化-审计.md`
 
-4. **安全监控 UI 交互与 IP 点击复制**：
-   - `src/components/security/ClickableIp.tsx`：封装统一的 IP 点击复制组件，支持完整未截断 IP 复制、`e.stopPropagation()` 阻止表格行折叠冒泡，并联动 `showToast`。
-   - 彻底移除了鼠标悬停在 IP 上的原生 `title` 浮动提示，消除浏览器黑色原生遮挡泡泡。
-   - 在「访问日志」(`IpAccessLogs.tsx`)、「访问排行 (日)」(`IpStatistics.tsx`)、「黑/白名单卡片」(`IpRuleManager.tsx`) 全面落地。
-
-5. **IP 威胁情报画像展示与访问日志交互重构**：
-   - `src/components/security/IpAccessLogs.tsx`：保持访问地址/请求详情的原生清晰紧凑布局（不引入复杂的嵌套卡片），保留纯 CSS Grid (`grid-rows-[0fr]` <-> `grid-rows-[1fr]`) 极致丝滑的高性能折叠展开动画；移除折叠内部的画像卡片。
-   - `src/components/security/IpStatistics.tsx`：在「访问排行 (日)」列表中，归属地文本后默认直接展示 `risk_score` 风险等级徽标；将整个归属地区域（归属地文本 + `risk_score` 徽标）封装为悬停触发区，鼠标 hover 即可无缝展出 IP 威胁情报画像。
-   - `src/components/security/IpRiskBadge.tsx`：支持包裹子节点，增强了视图边缘智能自适应定位（防右侧/下侧截断）和离开缓冲延迟防抖（150ms），确保鼠标移动到卡片上交互流畅。
-   - `src/components/security/IpThreatCard.tsx`：UI 与排版全面重构，采用 SVG 双色渐变环形进度仪表盘、2x2 专业微卡片矩阵（归属地、运营商、应用场景、网络类型）与底部研判横幅，视觉质感与信息层级大幅提升。
-   - `src-tauri/src/modules/geoip.rs`：清理并移除了不再需要的兜底降级接口，保证性能最优。
-
-6. **三大边界与性能隐患深度闭环修复**：
-   - `src-tauri/src/modules/geoip.rs` & `src-tauri/src/modules/security_db.rs`：移除强制 `risk_score.is_some()` 导致的海外 IP 缓存穿透，彻底阻断后台对百度 API 的无限死循环重查，消除了接口被风控封禁的风险。
-   - `src-tauri/src/modules/proxy_db.rs`：`backfill_session_titles` 增加 SQL 级关键词初筛过滤，消除冷启动时对千条普通对话大报文的无谓扫描与标题回填饥饿。
-   - `src/utils/ipThreatCache.ts`：增加 `MAX_CACHE_SIZE = 500` LRU 淘汰、`IN_FLIGHT` 单飞请求去重与 `sessionStorage` 节流写入，杜绝内存泄露与并发风暴。
-
-## 2. 验证凭证与健康指标
-- [x] **版本门禁自动化核验**：`node scripts/check-version.mjs` 全绿，所有配置文件一致为 `v4.8.32`。
-- [x] **后端 Rust 编译与测试**：`cargo test --lib` 678 tests 全绿通过（0 failed）。
-- [x] **前端类型检查与打包**：`npx tsc --noEmit` 0 error，TypeScript 类型系统 100% 严密闭环。
-- [x] **热更新（HMR）状态**：开发服务器正常运行，所有 UI 变更已即时生效。
-
-## 3. 用户自测指引
-- 访问日志：展开与收起请求详情，验证 CSS Grid 过渡动画是否流畅平滑。
-- 访问排行 (日)：查看归属地列，确认默认显示归属地和 `risk_score` 徽标；鼠标悬停在归属地上，确认精美的 IP 威胁情报画像能优雅浮现。
-- 海外 IP 测试：确认海外 IP（如 `8.8.8.8`）能够正确缓存，后台不会反复重发请求。

@@ -836,11 +836,16 @@ fn get_stale_geo_ips_with_connection(
 
     // 单条 IN 查询取全部缓存状态，避免逐 IP query_row 的 N+1。
     let placeholders = unique.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT ip, success, queried_at, risk_score FROM ip_geo WHERE ip IN ({placeholders})");
+    let sql = format!(
+        "SELECT ip, success, queried_at, risk_score FROM ip_geo WHERE ip IN ({placeholders})"
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let found: HashMap<String, (i64, i64, Option<String>)> = stmt
         .query_map(params_from_iter(unique.iter().copied()), |row| {
-            Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get(1)?, row.get(2)?, row.get(3)?),
+            ))
         })
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<Vec<_>>>()

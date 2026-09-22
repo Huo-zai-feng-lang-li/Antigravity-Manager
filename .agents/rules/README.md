@@ -87,7 +87,13 @@
 2. **发布与推送纪律**：
    - **版本更新必须附带 CHANGELOG**：修改版本号必须同步补齐 `CHANGELOG.md` 及 `CHANGELOG_EN.md`。
    - **只要提交必须推送到远程**：依赖 `post-commit` 钩子或显式 `git push` 同步分支与 tags。
-3. **变更审查清单**：
+3. **开发测试与发布构建分离 (Dev Test vs Release Build)**：
+   - **开发阶段自测：本地启动，禁止等待 GitHub 构建**。
+     - 只改前端（React/TS/CSS）：`npm run dev` + 运行已有 exe，Vite 热更新，刷新页面即生效。
+     - 改了 Rust 后端：`npm run tauri dev`，自动重新编译并重启应用。
+   - **GitHub Actions 构建仅用于正式发布**（版本号递增并打 Tag 时触发），不用于日常开发自测。
+   - **需要等待 GitHub 构建的场景**：发布新版本给用户、测试 macOS/Linux 等非本地平台、验证 CI 流水线是否通过。
+4. **变更审查清单**：
    - [ ] 圈复杂度是否保持 < 9？
    - [ ] 是否存在任何未脱敏的凭证日志？
    - [ ] 是否破坏了原子化文件写入或并发锁安全性？

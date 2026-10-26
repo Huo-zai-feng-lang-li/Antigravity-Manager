@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.36 (2026-10-26)**:
+        -   **[Cloudflared Custom Domain Override Fix]**:
+            -   `cloudflared.rs`: Fixed a bug where the user-configured `custom_domain` was overridden by log parsing in named tunnel mode.
+            -   Previously, the background log reader would extract the first `hostname` from the ingress configuration and forcibly overwrite the current URL, causing incorrect display when sharing a tunnel across multiple domains.
+            -   Now, if a custom domain is explicitly configured, it is treated as the highest priority. The background log reader will ignore URL override requests, ensuring the UI always displays the correct user-configured address.
     *   **v4.8.35 (2026-10-26)**:
         -   **[Cloudflared binary now installs to D: drive by default]**:
             -   `cloudflared.rs`: Added `resolve_bin_path()` resolution strategy — honors `ABV_CLOUDFLARED_PATH` env var first, then on Windows prefers `D:\cloudflared\cloudflared.exe` (reuses existing install); if D: exists but no binary, creates the directory and defaults there; falls back silently to `<data_dir>\bin` when D: is missing, read-only, or lacks permissions — zero regression.

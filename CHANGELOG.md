@@ -3,6 +3,11 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.36 (2026-10-26)**:
+        -   **[Cloudflared 自定义域名防覆盖]**:
+            -   `cloudflared.rs`：修复在命名隧道模式下，用户配置的 `custom_domain` 被日志解析覆盖的 Bug。
+            -   原逻辑为后台从日志解析首个 `hostname` 并强制覆盖当前 URL，导致多域名共享隧道时显示错误。
+            -   现改为：若用户显式配置了自定义域名，则视为最高优先级，后台日志读取器将忽略 URL 覆盖请求，确保 UI 始终展示用户配置的正确地址。
     *   **v4.8.35 (2026-10-26)**:
         -   **[Cloudflared 二进制默认安装到 D 盘]**:
             -   `cloudflared.rs`：新增 `resolve_bin_path()` 路径解析策略——优先环境变量 `ABV_CLOUDFLARED_PATH`，其次 Windows 下优先 `D:\cloudflared\cloudflared.exe`（已存在则复用），D 盘存在但未安装时尝试创建目录并默认落 D 盘；创建失败或 D 盘不存在时静默回退 `<data_dir>\bin`，零回归。

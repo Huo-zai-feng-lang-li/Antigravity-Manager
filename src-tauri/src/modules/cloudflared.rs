@@ -397,18 +397,6 @@ impl CloudflaredManager {
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let status_clone = self.status.clone();
-        if let Some(stdout) = stdout {
-            spawn_log_reader(stdout, status_clone.clone());
-        }
-
-        if let Some(stderr) = stderr {
-            spawn_log_reader(stderr, status_clone.clone());
-        }
-
         let initial_url = if config.mode == TunnelMode::Auth {
             config.custom_domain.as_ref().and_then(|d| {
                 let trimmed = d
@@ -426,14 +414,28 @@ impl CloudflaredManager {
             None
         };
 
+        let ignore_url_override = initial_url.is_some();
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let status_clone = self.status.clone();
+        if let Some(stdout) = stdout {
+            spawn_log_reader(stdout, status_clone.clone(), ignore_url_override);
+        }
+
+        if let Some(stderr) = stderr {
+            spawn_log_reader(stderr, status_clone.clone(), ignore_url_override);
+        }
+
         *self.process.write().await = Some(child);
         self.update_status(|s| {
             s.installed = installed.clone();
             s.version = version.clone();
             s.running = true;
             s.error = None;
-            if initial_url.is_some() {
-                s.url = initial_url;
+            if ignore_url_override {
+                s.url = initial_url.clone();
             }
         })
         .await;
@@ -539,8 +541,11 @@ fn get_download_url() -> Result<String, String> {
     ))
 }
 
-fn spawn_log_reader<R>(stream: R, status_ref: Arc<RwLock<CloudflaredStatus>>)
-where
+fn spawn_log_reader<R>(
+    stream: R,
+    status_ref: Arc<RwLock<CloudflaredStatus>>,
+    ignore_url_override: bool,
+) where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
@@ -549,10 +554,13 @@ where
         while let Ok(Some(line)) = lines.next_line().await {
             // 恢复日志级别为 debug，避免污染生产环境日志
             debug!("[cloudflared output] {}", line);
-            if let Some(url) = extract_tunnel_url(&line) {
-                info!("[cloudflared] Tunnel URL: {}", url);
-                let mut s = status_ref.write().await;
-                s.url = Some(url);
+            // 如果用户配置了自定义域名（ignore_url_override=true），则不覆盖 URL
+            if !ignore_url_override {
+                if let Some(url) = extract_tunnel_url(&line) {
+                    info!("[cloudflared] Tunnel URL: {}", url);
+                    let mut s = status_ref.write().await;
+                    s.url = Some(url);
+                }
             }
         }
     });

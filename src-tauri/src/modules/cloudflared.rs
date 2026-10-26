@@ -95,15 +95,100 @@ pub struct CloudflaredManager {
     shutdown_tx: RwLock<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
+/// 解析 cloudflared 可执行文件的目标路径。
+///
+/// 优先级（自上而下）：
+///   1. 环境变量 `ABV_CLOUDFLARED_PATH`（显式覆盖，非空且非裸文件名时生效）
+///   2. Windows 且 D 盘存在时优先 D 盘（避免 68MB 二进制占用系统盘）：
+///      - 已存在 `D:\cloudflared\cloudflared.exe` → 用它
+///      - 已存在 `D:\tools\cloudflared\cloudflared.exe` → 用它
+///      - 都不存在（但 D 盘存在）→ 默认 `D:\cloudflared\cloudflared.exe`（首次安装自动建目录）
+///   3. 回退：`<data_dir>\bin\cloudflared.exe`（旧行为，无 D 盘 / 无写权限 / 非 Windows 时兜底）
+fn resolve_bin_path(data_dir: &PathBuf) -> PathBuf {
+    let bin_name = if cfg!(target_os = "windows") {
+        "cloudflared.exe"
+    } else {
+        "cloudflared"
+    };
+
+    // 1) 环境变量显式覆盖（非空且不是裸文件名）
+    if let Ok(env_path) = std::env::var("ABV_CLOUDFLARED_PATH") {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            let has_dir = p.is_absolute()
+                || p.parent().map_or(false, |par| !par.as_os_str().is_empty());
+            if has_dir {
+                return p;
+            }
+        }
+    }
+
+    // 2) Windows：D 盘优先（已存在优先复用；否则尝试建目录，建不了回退 C 盘）
+    #[cfg(target_os = "windows")]
+    {
+        if std::path::Path::new("D:\\").exists() {
+            // 2a) 已安装的现成二进制优先（避免覆盖用户已有安装）
+            let d_primary = PathBuf::from("D:\\cloudflared").join(bin_name);
+            if d_primary.exists() {
+                return d_primary;
+            }
+            let d_alt = PathBuf::from("D:\\tools\\cloudflared").join(bin_name);
+            if d_alt.exists() {
+                return d_alt;
+            }
+            // 2b) D 盘存在但都未安装 → 尝试创建 D:\\cloudflared 目录
+            //     成功：首次安装默认落 D 盘
+            //     失败（只读盘/无权限）：静默回退 data_dir，不阻断安装
+            if std::fs::create_dir_all(PathBuf::from("D:\\cloudflared")).is_ok() {
+                return d_primary;
+            }
+        }
+    }
+
+    // 3) 回退：用户数据目录（旧行为，零回归）
+    data_dir.join("bin").join(bin_name)
+}
+
+/// 老版本升级平滑迁移：
+/// 旧版本把 cloudflared 装在 `<data_dir>\bin\cloudflared.exe`。新版本解析到 D 盘后，
+/// 若 D 盘尚无二进制而旧位置有，则自动复制过去，避免用户升级后突然显示"未安装"。
+///
+/// - 复制失败（磁盘满/权限）：静默忽略，后续由调用方回退旧路径，不阻断启动
+/// - 源文件删除失败（进程占用/权限）：忽略。C 盘残留不影响功能（D 盘副本已就位）
+fn migrate_legacy_install(data_dir: &PathBuf, new_path: &PathBuf) {
+    #[cfg(target_os = "windows")]
+    {
+        // 仅当新路径不是 data_dir 内部、且新位置尚无文件时迁移
+        let legacy = data_dir.join("bin").join("cloudflared.exe");
+        if new_path.exists() || !legacy.exists() {
+            return;
+        }
+        // 目标是 data_dir 内部（回退路径）时无需迁移
+        if new_path.starts_with(data_dir) {
+            return;
+        }
+        if let Some(parent) = new_path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        if std::fs::copy(&legacy, new_path).is_ok() {
+            // 复制成功：尝试删旧文件（失败无害，仅残留）
+            let _ = std::fs::remove_file(&legacy);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (data_dir, new_path);
+    }
+}
+
 impl CloudflaredManager {
     pub fn new(data_dir: &PathBuf) -> Self {
-        let bin_name = if cfg!(target_os = "windows") {
-            "cloudflared.exe"
-        } else {
-            "cloudflared"
-        };
-        let bin_path = data_dir.join("bin").join(bin_name);
-
+        let bin_path = resolve_bin_path(data_dir);
+        // 老版本升级迁移（D 盘目标为空时，从旧 data_dir 搬一次）
+        migrate_legacy_install(data_dir, &bin_path);
         Self {
             process: Arc::new(RwLock::new(None)),
             status: Arc::new(RwLock::new(CloudflaredStatus::default())),

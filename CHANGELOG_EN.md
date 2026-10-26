@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.35 (2026-10-26)**:
+        -   **[Cloudflared binary now installs to D: drive by default]**:
+            -   `cloudflared.rs`: Added `resolve_bin_path()` resolution strategy — honors `ABV_CLOUDFLARED_PATH` env var first, then on Windows prefers `D:\cloudflared\cloudflared.exe` (reuses existing install); if D: exists but no binary, creates the directory and defaults there; falls back silently to `<data_dir>\bin` when D: is missing, read-only, or lacks permissions — zero regression.
+            -   Added `migrate_legacy_install()`: on upgrade, if D: has no binary but the legacy `data_dir\bin` does, copies it over and cleans up the old file, preventing a false "not installed" state. Copy/delete failures are ignored silently and never block startup.
+            -   Benefit: the 68 MB binary no longer defaults to the system drive (C:); behavior on machines without D:, with read-only disks, or lacking permissions is identical to the previous version.
     *   **v4.8.33 (2026-09-22)**:
         -   **[Token Stats Enhancement & Local Timezone Offset Fix]**:
             -   `token_stats.rs`: Introduced 6 aggregated metrics for today's token consumption (total tokens, by-model, by-IP, by-token, 24-hour distribution, and today's request count), backed by SQLite composite indices.

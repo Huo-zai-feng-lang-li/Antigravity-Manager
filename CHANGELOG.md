@@ -3,6 +3,11 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.35 (2026-10-26)**:
+        -   **[Cloudflared 二进制默认安装到 D 盘]**:
+            -   `cloudflared.rs`：新增 `resolve_bin_path()` 路径解析策略——优先环境变量 `ABV_CLOUDFLARED_PATH`，其次 Windows 下优先 `D:\cloudflared\cloudflared.exe`（已存在则复用），D 盘存在但未安装时尝试创建目录并默认落 D 盘；创建失败或 D 盘不存在时静默回退 `<data_dir>\bin`，零回归。
+            -   新增 `migrate_legacy_install()`：老版本升级时若 D 盘尚无二进制而旧 `data_dir\bin` 有，自动复制迁移并清理旧文件，避免升级后误显示"未安装"。复制/删除失败均静默忽略，不阻断启动。
+            -   收益：68MB 二进制不再默认占用系统盘（C 盘）；无 D 盘 / 只读盘 / 无权限环境行为与旧版完全一致。
     *   **v4.8.33 (2026-09-22)**:
         -   **[Token 消费统计增强与时区偏移彻底根除]**:
             -   `token_stats.rs`：新增今日 Token 统计 6 项聚合指标（总消耗、按模型统计、按 IP 统计、按 Token 统计、24 小时分布趋势、今日请求数），底层 SQL 复合索引无缝覆盖。

@@ -3,6 +3,18 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.38 (2026-11-04)**:
+        -   **[Fix: Sticky Sessions Completely Inert on /v1/responses]**:
+            -   `openai.rs`: `responses_routing_session_id()` now accepts `prompt_cache_key` and `content_fallback`. Priority is `session_id` > `prompt_cache_key` > `stored_routing_session_id` > `previous_response_id` > `content_fallback` > random UUID.
+            -   Root cause: for stateless clients (`store:false`) that send neither `session_id` nor `previous_response_id`, the old code fell through to `format!("resp-{}", Uuid::new_v4())` on every request, so `session_accounts` never matched a prior binding and account selection degenerated into random P2C. Measured: one conversation's 48 requests bounced across 4 accounts, invalidating the prompt cache each time.
+            -   `prompt_cache_key` is the OpenAI-standard cache-affinity field, and `content_fallback` reuses the exact `extract_openai_session_id` heuristic already used by `/v1/chat/completions` — both are protocol-general, not client-specific special casing.
+            -   `routing_session_id` is now computed after `openai_req` is built so the content fingerprint is available; two new unit tests cover the priority chain and empty-string boundaries.
+            -   Benefit: a single conversation sticks to one account, restoring prompt-cache hit rate and narrowing time-to-first-token variance.
+        -   **[CI Build Fix]**:
+            -   `cloudflared.rs`: corrected the line breaking of `has_dir` in `resolve_bin_path()`, fixing the `cargo fmt --check` failure in CI.
+        -   **[Honest Scheduling Mode UI Copy]**:
+            -   `ApiProxy.tsx` / `zh.json` / `en.json`: the "Max Wait" slider under Cache-First never actually took effect (the waiting logic was removed in Issue #284 to avoid client socket timeouts). It is now labelled "Inactive" so the UI no longer promises behavior the runtime does not deliver.
+            -   Backend behavior is unchanged; restoring the waiting capability requires solving client timeouts and is a separate task.
     *   **v4.8.37 (2026-11-04)**:
         -   **[Fix: Context Compression Level UI Desynced from Backend]**:
             -   `ApiProxy.tsx`: Fixed a bug where the "Intelligent Context Compression Level" selector showed "Disabled" while the backend `get_global_compression_level()` actually returned `high`, triggered when `compression_level="disabled"` and `enable_usage_scaling=true` were both present.

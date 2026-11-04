@@ -3,6 +3,18 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.38 (2026-11-04)**:
+        -   **[修复 /v1/responses 粘性会话完全失效]**:
+            -   `openai.rs`：`responses_routing_session_id()` 新增 `prompt_cache_key` 与 `content_fallback` 两个来源，优先级调整为 `session_id` > `prompt_cache_key` > `stored_routing_session_id` > `previous_response_id` > `content_fallback` > 随机 UUID。
+            -   根因：无状态客户端（`store:false`）不传 `session_id` / `previous_response_id` 时，旧逻辑每次都兜底到 `format!("resp-{}", Uuid::new_v4())`，导致 `session_accounts` 永远查不到历史绑定，选号退化为随机 P2C；实测同一对话 48 条请求账号在 4 个账号间反复跳转，Prompt Cache 持续失效。
+            -   `prompt_cache_key` 是 OpenAI 标准缓存亲和字段，`content_fallback` 复用与 `/v1/chat/completions` 完全一致的 `extract_openai_session_id` 启发式，均为通用能力而非客户端特化。
+            -   `routing_session_id` 的计算位置后移至 `openai_req` 构建完成之后，以便内容指纹可用；新增 2 个单元测试覆盖新优先级链与空字符串边界。
+            -   收益：同一对话稳定绑定同一账号，Prompt Cache 命中率恢复，首字延迟波动收窄。
+        -   **[CI 构建修复]**:
+            -   `cloudflared.rs`：修正 `resolve_bin_path()` 中 `has_dir` 的断行方式，修复 `cargo fmt --check` 导致的 CI 失败。
+        -   **[调度模式 UI 文案诚实化]**:
+            -   `ApiProxy.tsx` / `zh.json` / `en.json`：「缓存优先」模式的最大等待时长滑块在当前版本并不生效（等待逻辑于 Issue #284 移除以规避客户端 socket 超时），现已如实标注「暂未生效」，避免 UI 与运行时行为不一致误导用户。
+            -   后端行为不变，等待能力的恢复需同步解决客户端超时，属独立任务。
     *   **v4.8.37 (2026-11-04)**:
         -   **[上下文压缩等级 UI 与后端判定不一致修复]**:
             -   `ApiProxy.tsx`：修复「智能上下文压缩等级」在 `compression_level="disabled"` 且 `enable_usage_scaling=true` 时，UI 显示「关闭」但后端 `get_global_compression_level()` 实际返回 `high` 的问题。

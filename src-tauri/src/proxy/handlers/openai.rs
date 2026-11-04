@@ -972,30 +972,113 @@ mod stream_peek_tests {
 
     #[test]
     fn responses_routing_identity_follows_the_response_chain() {
-        let first = responses_routing_session_id(None, None, None, "resp-root-a");
-        let second = responses_routing_session_id(None, None, None, "resp-root-b");
+        // No signal at all still falls back to the per-request response id.
+        let first = responses_routing_session_id(None, None, None, None, None, "resp-root-a");
+        let second = responses_routing_session_id(None, None, None, None, None, "resp-root-b");
         assert_eq!(first, "resp-root-a");
         assert_eq!(second, "resp-root-b");
         assert_ne!(first, second);
 
-        let continued =
-            responses_routing_session_id(None, Some("resp-parent"), Some(&first), "resp-child");
-        let branch =
-            responses_routing_session_id(None, Some("resp-parent"), Some(&first), "resp-branch");
+        // A parent response id keeps the whole chain on one sticky key.
+        let continued = responses_routing_session_id(
+            None,
+            None,
+            Some(&first),
+            Some("resp-parent"),
+            None,
+            "resp-child",
+        );
+        let branch = responses_routing_session_id(
+            None,
+            None,
+            Some(&first),
+            Some("resp-parent"),
+            None,
+            "resp-branch",
+        );
         assert_eq!(continued, first);
         assert_eq!(branch, first);
+
+        // Explicit session_id outranks every other signal.
         assert_eq!(
             responses_routing_session_id(
                 Some("client-session"),
-                Some("resp-parent"),
+                Some("cache-key"),
                 Some(&first),
+                Some("resp-parent"),
+                Some("content-hash"),
                 "resp-child"
             ),
             "client-session"
         );
+
+        // An unknown parent id still identifies the chain.
         assert_eq!(
-            responses_routing_session_id(None, Some("resp-missing"), None, "resp-child"),
+            responses_routing_session_id(
+                None,
+                None,
+                None,
+                Some("resp-missing"),
+                None,
+                "resp-child"
+            ),
             "resp-missing"
+        );
+    }
+
+    #[test]
+    fn responses_routing_prefers_prompt_cache_key_over_content_fingerprint() {
+        // Stateless clients (store=false) send prompt_cache_key every turn.
+        // It must win over the content fingerprint so the whole conversation
+        // stays on one account and keeps its prompt cache warm.
+        assert_eq!(
+            responses_routing_session_id(
+                None,
+                Some("cache-key-a"),
+                None,
+                None,
+                Some("content-hash"),
+                "resp-1"
+            ),
+            "cache-key-a"
+        );
+
+        // Two turns of the same conversation share the cache key.
+        let turn_one = responses_routing_session_id(
+            None,
+            Some("cache-key-a"),
+            None,
+            None,
+            Some("hash-turn-1"),
+            "resp-1",
+        );
+        let turn_two = responses_routing_session_id(
+            None,
+            Some("cache-key-a"),
+            None,
+            None,
+            Some("hash-turn-2"),
+            "resp-2",
+        );
+        assert_eq!(turn_one, turn_two);
+
+        // Without a cache key, the content fingerprint still stabilizes the session.
+        assert_eq!(
+            responses_routing_session_id(None, None, None, None, Some("content-hash"), "resp-3"),
+            "content-hash"
+        );
+
+        // Empty strings are treated as absent rather than as real keys.
+        assert_eq!(
+            responses_routing_session_id(
+                Some(""),
+                Some(""),
+                Some(""),
+                Some(""),
+                Some(""),
+                "resp-fallback"
+            ),
+            "resp-fallback"
         );
     }
 
@@ -1706,16 +1789,37 @@ fn codex_ledger_from_body(
     (ledger, markers)
 }
 
+/// Resolve the sticky-session key for /v1/responses requests.
+///
+/// Priority (highest first):
+///   1. `session_id` — client explicitly names the conversation.
+///   2. `prompt_cache_key` — OpenAI-standard cache-affinity hint. Any client that
+///      wants stable prompt caching sends this; honoring it is protocol support,
+///      not client-specific special casing.
+///   3. `stored_routing_session_id` — recovered from the parent session when the
+///      client chains via `previous_response_id` and `store` is enabled.
+///   4. `previous_response_id` — identifier of the parent response itself.
+///   5. `content_fallback` — content fingerprint (same heuristic used by
+///      /v1/chat/completions), for stateless clients that supply none of the above.
+///   6. `response_id` — random UUID, only when every prior signal is absent.
+///
+/// Before `prompt_cache_key` / `content_fallback` were honored, stateless
+/// `store:false` clients fell through to step 6 on *every* request, which gave
+/// each turn a fresh sticky-session key and silently disabled session affinity.
 fn responses_routing_session_id(
     explicit_session_id: Option<&str>,
-    previous_response_id: Option<&str>,
+    prompt_cache_key: Option<&str>,
     stored_routing_session_id: Option<&str>,
+    previous_response_id: Option<&str>,
+    content_fallback: Option<&str>,
     response_id: &str,
 ) -> String {
     explicit_session_id
         .filter(|id| !id.is_empty())
+        .or(prompt_cache_key.filter(|id| !id.is_empty()))
         .or(stored_routing_session_id.filter(|id| !id.is_empty()))
         .or(previous_response_id.filter(|id| !id.is_empty()))
+        .or(content_fallback.filter(|id| !id.is_empty()))
         .unwrap_or(response_id)
         .to_string()
 }
@@ -2919,6 +3023,14 @@ pub async fn handle_completions(
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_string);
+    // `prompt_cache_key` is the OpenAI-standard cache-affinity hint. Extract it
+    // before `body` is consumed so stateless clients (store=false) can still get
+    // stable sticky-session affinity instead of a fresh UUID per request.
+    let prompt_cache_key = body
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
     let response_id_for_save = format!("resp-{}", uuid::Uuid::new_v4());
     let http_tool_call_cache: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
@@ -2986,12 +3098,6 @@ pub async fn handle_completions(
             return (StatusCode::BAD_REQUEST, message).into_response();
         }
     }
-    let routing_session_id = responses_routing_session_id(
-        explicit_session_id.as_deref(),
-        previous_response_id.as_deref(),
-        stored_routing_session_id.as_deref(),
-        &response_id_for_save,
-    );
     let signature_read_key = previous_response_id.clone();
 
     let mut bounded_session_input = None;
@@ -3526,10 +3632,21 @@ pub async fn handle_completions(
     }
 
     // [NEW v4.2.0] Context Management & Reasoning Replay
+    // The content fingerprint doubles as the last-resort sticky-session key for
+    // /v1/responses requests that carry no explicit session marker.
+    let content_session_fingerprint = SessionManager::extract_openai_session_id(&openai_req);
+    let routing_session_id = responses_routing_session_id(
+        explicit_session_id.as_deref(),
+        prompt_cache_key.as_deref(),
+        stored_routing_session_id.as_deref(),
+        previous_response_id.as_deref(),
+        Some(content_session_fingerprint.as_str()),
+        &response_id_for_save,
+    );
     let session_id_str = if is_responses_api {
         routing_session_id.clone()
     } else {
-        SessionManager::extract_openai_session_id(&openai_req)
+        content_session_fingerprint
     };
     let signature_session_id_str = if is_responses_api {
         previous_response_id

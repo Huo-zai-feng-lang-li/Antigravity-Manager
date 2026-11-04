@@ -1,65 +1,95 @@
-# 最新接续状态 (2026-11-04 19:00)
+# 最新接续状态 (2026-11-04 21:12)
 
 ## 核心进展
 
-### 当前版本：v4.8.37（修复上下文压缩等级 UI 与后端判定不一致）
+**工作区有 5 个文件未提交改动（尚未 commit），需 CI 验证后决定是否发版。**
 
-**背景**：用户排查公网访问延迟与封号风险时，逐项核对 `gui_config.json` 与代码，发现「智能上下文压缩等级」在 UI 上显示「关闭 (Disabled)」，但后端可能仍在跑 high 级压缩。
+### 改动一：修复 /v1/responses 粘性会话完全失效（核心 Bug）
 
-**根因（已用代码证据确认）**：
-- 后端 `config.rs:184-205` `get_global_compression_level()`：`compression_level == "disabled"` 且 `enable_usage_scaling == true` 时，实际返回 `"high"`。
-- 同样兜底逻辑另有两处：`claude.rs:569-577`、`openai.rs:3551-3559`；`gemini/wrapper.rs:44` 直接调用全局函数。
-- 前端 `ApiProxy.tsx:2014` 用 `compression_level || (enable_usage_scaling ? 'high' : 'disabled')`，因 `"disabled"` 是非空字符串使 `||` 短路，UI 显示 disabled、后端实际 high。
-- 另有默认值漂移：前端 `ApiProxy.tsx:774` 默认 `enable_usage_scaling: true`，后端 `config.rs:430` 默认 `false`。
+**现象**：48 条同一对话的请求（输入 token 45805 → 59757 单调增长），账号却在 zka / kun / doa / marshall 之间反复跳转，Prompt Cache 持续失效，首字耗时 4.5s ~ 21s 剧烈波动。
 
-**修复**：
-- 新增 `getEffectiveCompressionLevel(exp?: ExperimentalConfig)`，判定逻辑与后端三处逐字对齐。
-- 下拉框 `value` 与阈值面板显示条件（原 2014 / 2030 行）统一改走该函数。
-- 前端 `experimental` 兜底默认值改为 `enable_usage_scaling: false` 并补 `compression_level: 'disabled'`，与后端 `ExperimentalConfig::default()` 一致。
+**根因链（已用流量日志 + 代码双重取证）**：
+1. 客户端（Minis）每次请求都带 `prompt_cache_key: "minis-7c9691..."`，48 条完全一致。
+2. `grep prompt_cache_key` → **Rust 源码零匹配**，代码完全不认这个字段。
+3. `responses_routing_session_id` 在 `store:false` 的 stateless 模式下，前三个来源（`session_id` / `previous_response_id` / `stored_routing_session_id`）全部为 None，兜底落到 `format!("resp-{}", uuid::Uuid::new_v4())`。
+4. 每次新 UUID → `session_accounts`（以 session_id 为 key）永远查不到历史绑定 → 选号退化成 P2C 随机。
 
-**验证**：
-- `npx tsc --noEmit` 通过（无输出）
-- `npm run build` 通过（16619 modules，built in 1m16s）
-- `node scripts/check-version.mjs` → ALL VERSION CHECKS PASSED（4.8.37）
-- 子代理 code-reviewer 审查结论：可通过；主代理逐行复核前后端判定等价
-- 本机无 Rust 工具链，Rust 侧未改动，编译验证依赖 GitHub Actions
+**通用性**：任何走 `/v1/responses` + `store:false` 的客户端都会中招，不是 Minis 专属问题。
 
-**仅改动 1 个源文件**：`src/pages/ApiProxy.tsx`（+21 / -3）
+**实测验证（Python + sqlite 读 proxy_logs.db）**：
+- cache_key `minis-7c9691...`：48 条请求，首条 user 消息 SHA256 **只有 1 个不同值 → STABLE**
+- cache_key `minis-d07210...`：7 条请求，同样 **STABLE**
 
-### 本轮对话的其他排查结论（未改动代码，供后续参考）
+**修复**（`src-tauri/src/proxy/handlers/openai.rs`）：
+- `responses_routing_session_id` 新增 2 个参数 `prompt_cache_key` 与 `content_fallback`。
+- 新优先级：`session_id` > `prompt_cache_key` > `stored_routing_session_id` > `previous_response_id` > `content_fallback` > 随机 UUID。
+- `content_fallback` 复用 `SessionManager::extract_openai_session_id`，与 `/v1/chat/completions` 完全同一套启发式。
+- `routing_session_id` 的计算位置从 `openai_req` 构建**之前**移到**之后**（内容哈希需要 `openai_req`）。
+- 新增/改写 2 个单元测试覆盖新优先级与空字符串边界。
 
-1. **公网延迟**：`https://antigravity-remote-api.ai95.indevs.in` 实测 TTFB ≈ 1.0s，本地 8045 直连 ≈ 2ms，同请求本地 3.4~3.9s vs 公网 4.4~6.7s，即 CF 隧道仅占约 1s。`ping` CF Tunnel 接入 IP 198.41.192.27 约 254ms（`ping 1.1.1.1` 仅 96ms），connector 连到 lax01/lax05/lax11/sjc01（全美西）。
-2. **`--region hkg` 不可用**：免费版报 `Could not lookup srv records on _hkg-v2-origintunneld._tcp.argotunnel.com`，SRV 记录不存在，属付费能力。
-3. **`--edge-ip-version 4` 无效**：强制 IPv4 后仍连美西机房，CF 按 IP 段分配，无法改变。
-4. **`--ha-connections` 参数不存在**：cloudflared 2026.10.0 的 global 与 `tunnel run` 帮助中均无此参数。
-5. **上游耗时拆解**：经 51081 代理到 `cloudcode-pa.googleapis.com` 约 1.2s；6s 首字 ≈ 2.3s Gemini 推理 + 1.2s 代理 + 1.0s CF + 波动。直连 1.1.1.1:443 超时（8s），换 DNS 反而更慢。
-6. **封号风险**：`accounts/` 下 33 个账号全部有独立且唯一的 `device_profile`（machine_id / mac_machine_id 均无重复）。剩余风险为 33 号共用单一出口 IP（`socks5h://127.0.0.1:51081`）与进程级共用 `x-vscode-sessionid`；后者经核实符合官方一次启动一个 session 的真实行为，不建议改动（曾误判为需修复，已撤回）。
-7. **请求节奏**：真实日志显示请求间隔 5~15 秒，天然错峰，无需额外并发控制。
+### 改动二：修复 CI 的 cargo fmt 失败
+
+`src-tauri/src/modules/cloudflared.rs:119`：`let has_dir = p.is_absolute() || p.parent()...` 的断行方式不符合 rustfmt，CI 在 "Check Rust formatting" 步骤 exit code 1。已按 rustfmt 预期格式重排。
+
+### 改动三：UI 不再虚假承诺「缓存优先会等待」
+
+**已确认的第二个缺陷**：`max_wait_seconds` 字段全项目**零读取**（只在 `sticky_config.rs` 定义与给默认值），`CacheFirst` 与 `Balance` 在 `token_manager.rs` 中走完全相同的分支（唯一判断是 `!= PerformanceFirst`）。
+
+原因见 `token_manager.rs:2134-2140` 注释：Issue #284 修复时「立即解绑并切换账号，不再阻塞等待」，因为阻塞等待会导致客户端 socket 超时。等待逻辑被有意删除，但 UI 没跟着改。
+
+**本次只改文案，不动行为**（避免重蹈 socket 超时覆辙）：
+- `src/locales/zh.json` / `en.json`：`CacheFirst` 描述、`mode_tooltip`、`max_wait_tooltip` 改为如实说明「当前与 Balance 行为一致」。
+- 新增 `max_wait_inactive` 文案。
+- `src/pages/ApiProxy.tsx`：最大等待滑块区域降低透明度，加「暂未生效」徽标。
 
 ## 核心动机与背景 (Motivation & Background)
-- 用户要求：确认为真实 bug 后修复，子代理检查，通过后提交并打 tag 推送
-- 用户偏好：一次性闭环、代码改动先交子代理检查再主代理二次核验
+
+用户排查公网访问延迟与封号风险时，逐项核对配置与代码，发现「缓存优先」模式选着却仍在换账号。要求：确认为真 Bug 后再修，不得贸然改动；本次明确指示**不提交代码**，只更新文档、清理无用代码、暂存改动。
+
+## 关键设计与实现 (Implementation & Decisions)
+
+- **不改后端等待行为**：`max_wait_seconds` 保持不生效，只诚实化 UI。恢复等待需同步解决客户端超时，属于独立任务。
+- **兜底用内容哈希而非特化**：`prompt_cache_key` 是 OpenAI 官方字段（缓存亲和语义），`content_fallback` 与 chat/completions 同函数，两者都是通用能力，不针对任何客户端品牌。
+- **零风险边界**：`store:false` 时 `save_session_delta` 受 `if store_response` 守卫，不会被调用，不会污染 session store。
 
 ## 待办事项 (Next Steps)
-- [x] 确认 bug 成立（三处后端兜底逻辑 + 前端短路）
-- [x] 修复前端 helper 与默认值
-- [x] tsc / vite build / check-version 全绿
-- [x] 子代理 code-reviewer 审查通过
-- [ ] commit + tag v4.8.37 + push origin
-- [ ] CI 编译验证（本机无 cargo）
-- [ ] 用户拉新包真机验证：UI 显示与实际压缩行为一致
 
-## 已知遗留（非本次引入，未处理）
-- `enable_usage_scaling` 无独立 UI 开关，只能随「选 High」间接触发；若产品要求独立开关需另开任务
-- `compression_level` 类型为 `string` 而非联合类型，无编译期拼写保护
-- 前端默认值与后端多处默认值存在人肉同步风险
+- [x] **本地验证全部通过**（2026-11-04）：`cargo fmt --check` / `cargo check --all-targets` / `cargo test --lib`（680 passed）全绿；子代理 test-runner 独立复验结论一致。
+- [x] 版本递增 4.8.38 + 中英文 CHANGELOG + check-version.mjs 全绿。
+- [ ] commit + tag v4.8.38 + push origin，观察 GitHub Actions 结果。
+- [ ] 真机验证：同一对话连续请求应稳定命中同一账号，首字耗时趋于平稳（预期 3~6s），日志中 `sid=` 不再是随机 `resp-xxx`。
+
+## 本机 Rust 工具链的真实位置（重要）
+
+`D:\.cargo\bin`（cargo 1.94.1 / rustfmt 1.8.0）。
+
+**用户环境变量 PATH 里配的是死链** `C:\Users\Administrator\.cargo\bin`（目录不存在），导致新开 shell 一律找不到 cargo。每次使用前必须手动前置：
+
+```powershell
+$env:PATH = "D:\.cargo\bin;" + $env:PATH
+```
+
+根治办法（需用户自行操作，属系统环境）：把用户 PATH 中的 `C:\Users\Administrator\.cargo\bin` 替换为 `D:\.cargo\bin`。
+
+## 已知遗留（未处理，非本次引入）
+
+- `enable_usage_scaling` 无独立 UI 开关，只能随「选 High」间接触发。
+- `compression_level` 类型为 `string` 而非联合类型，无编译期拼写保护。
+- 前端默认值与后端多处默认值靠人肉同步，存在漂移风险。
+- 33 个账号共用单一出口 IP（`socks5h://127.0.0.1:51081`），用户已知并接受。
 
 ## 关键上下文
+
 - 目录: `D:\Desktop\Super-File\AI-IDE\AI\反重力\Antigravity-Manager`
-- 分支: `main`，修复前 HEAD = `69949598`（v4.8.36）
-- 远端: origin = `github.com/Huo-zai-feng-lang-li/Antigravity-Manager`
-- 快照: `snap-1793788260314-n9kkyu`（修复前）
-- 本机无 Rust 工具链，Rust 验证只能靠 CI
+- 分支: `main`，HEAD = `d2730bff`（tag `v4.8.37` 已推送）
+- 未提交改动 5 个文件：
+  - `src-tauri/src/modules/cloudflared.rs`（+2/-2，格式）
+  - `src-tauri/src/proxy/handlers/openai.rs`（+130/-26，核心修复）
+  - `src/locales/zh.json`（+4/-3）
+  - `src/locales/en.json`（+4/-3）
+  - `src/pages/ApiProxy.tsx`（+5/-2）
+- 关键函数: `openai.rs::responses_routing_session_id`、`session_manager.rs::extract_openai_session_id`
+- 本机无 Rust 工具链；有 Python 3.13（`D:\Python313\python.exe`）与 sqlite3（`C:\sqlite3\sqlite3.exe`）可用于查 `~/.antigravity_tools/proxy_logs.db`
 
 ---
 

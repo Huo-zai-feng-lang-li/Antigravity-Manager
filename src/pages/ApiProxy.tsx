@@ -1887,13 +1887,16 @@ print(response.choices[0].message.content)`;
                                         </div>
 
                                         <div className="space-y-4 pt-1">
-                                            <div className="bg-slate-100 dark:bg-slate-800/80 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                                            <div className="bg-slate-100 dark:bg-slate-800/80 rounded-xl p-4 border border-slate-200 dark:border-slate-700 opacity-60">
                                                 <div className="flex items-center justify-between mb-2">
                                                     <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
                                                         {t('proxy.config.scheduling.max_wait')}
                                                         <HelpTooltip text={t('proxy.config.scheduling.max_wait_tooltip')} />
+                                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-gray-300 dark:bg-gray-600 text-[10px] text-gray-700 dark:text-gray-200 font-bold whitespace-nowrap">
+                                                            {t('proxy.config.scheduling.max_wait_inactive', { defaultValue: '暂未生效' })}
+                                                        </span>
                                                     </label>
-                                                    <span className="text-xs font-mono text-indigo-600 font-bold">
+                                                    <span className="text-xs font-mono text-gray-500 font-bold">
                                                         {appConfig.proxy.scheduling?.max_wait_seconds || 60}s
                                                     </span>
                                                 </div>

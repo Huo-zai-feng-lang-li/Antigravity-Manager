@@ -791,19 +791,20 @@
         "title_tooltip": "Controls how sessions are bound to accounts and how rate limits are handled.",
         "subtitle": "Optimizes Prompt Caching and rate limit handling for all protocols (OpenAI/Gemini/Claude).",
         "mode": "Scheduling Mode",
-        "mode_tooltip": "Cache-First: Bind session to account, wait on rate limit (maximize cache utility); Balance: Bind session, switch account on rate limit; Performance: Standard Round-robin.",
+        "mode_tooltip": "Cache-First: Bind session, switch immediately on rate limit (currently identical to Balance; true waiting is planned); Balance: Bind session, switch account on rate limit; Performance: Standard Round-robin.",
         "modes": {
           "CacheFirst": "Cache First",
           "Balance": "Balance",
           "PerformanceFirst": "Performance"
         },
         "modes_desc": {
-          "CacheFirst": "Binds session to account, waits precisely if limited (Maximizes Prompt Cache hits).",
+          "CacheFirst": "Binds session to account, switches immediately on rate limit (currently identical to Balance).",
           "Balance": "Binds session, auto-switches to available account if limited (Balanced cache & availability).",
           "PerformanceFirst": "No session binding, pure round-robin rotation (Best for high concurrency)."
         },
         "max_wait": "Max Wait (sec)",
-        "max_wait_tooltip": "Only used in 'Cache First' mode: wait instead of switching if the rate limit reset time is below this value.",
+        "max_wait_tooltip": "Not effective in the current version: the proxy still switches accounts immediately. Reserved for future 'Cache First' waiting capability.",
+        "max_wait_inactive": "Inactive",
         "clear_bindings": "Clear Session Bindings",
         "clear_bindings_tooltip": "Hard reset all session-account bindings, forcing accounts to be re-assigned on next request.",
         "clear_rate_limits": "Clear Rate Limit Records",

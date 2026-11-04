@@ -116,8 +116,8 @@ fn resolve_bin_path(data_dir: &PathBuf) -> PathBuf {
         let trimmed = env_path.trim();
         if !trimmed.is_empty() {
             let p = PathBuf::from(trimmed);
-            let has_dir = p.is_absolute()
-                || p.parent().map_or(false, |par| !par.as_os_str().is_empty());
+            let has_dir =
+                p.is_absolute() || p.parent().map_or(false, |par| !par.as_os_str().is_empty());
             if has_dir {
                 return p;
             }

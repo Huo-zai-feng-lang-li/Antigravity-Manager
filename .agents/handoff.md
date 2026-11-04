@@ -1,6 +1,69 @@
-# 最新接续状态 (2026-10-26 12:10)
+# 最新接续状态 (2026-11-04 19:00)
 
 ## 核心进展
+
+### 当前版本：v4.8.37（修复上下文压缩等级 UI 与后端判定不一致）
+
+**背景**：用户排查公网访问延迟与封号风险时，逐项核对 `gui_config.json` 与代码，发现「智能上下文压缩等级」在 UI 上显示「关闭 (Disabled)」，但后端可能仍在跑 high 级压缩。
+
+**根因（已用代码证据确认）**：
+- 后端 `config.rs:184-205` `get_global_compression_level()`：`compression_level == "disabled"` 且 `enable_usage_scaling == true` 时，实际返回 `"high"`。
+- 同样兜底逻辑另有两处：`claude.rs:569-577`、`openai.rs:3551-3559`；`gemini/wrapper.rs:44` 直接调用全局函数。
+- 前端 `ApiProxy.tsx:2014` 用 `compression_level || (enable_usage_scaling ? 'high' : 'disabled')`，因 `"disabled"` 是非空字符串使 `||` 短路，UI 显示 disabled、后端实际 high。
+- 另有默认值漂移：前端 `ApiProxy.tsx:774` 默认 `enable_usage_scaling: true`，后端 `config.rs:430` 默认 `false`。
+
+**修复**：
+- 新增 `getEffectiveCompressionLevel(exp?: ExperimentalConfig)`，判定逻辑与后端三处逐字对齐。
+- 下拉框 `value` 与阈值面板显示条件（原 2014 / 2030 行）统一改走该函数。
+- 前端 `experimental` 兜底默认值改为 `enable_usage_scaling: false` 并补 `compression_level: 'disabled'`，与后端 `ExperimentalConfig::default()` 一致。
+
+**验证**：
+- `npx tsc --noEmit` 通过（无输出）
+- `npm run build` 通过（16619 modules，built in 1m16s）
+- `node scripts/check-version.mjs` → ALL VERSION CHECKS PASSED（4.8.37）
+- 子代理 code-reviewer 审查结论：可通过；主代理逐行复核前后端判定等价
+- 本机无 Rust 工具链，Rust 侧未改动，编译验证依赖 GitHub Actions
+
+**仅改动 1 个源文件**：`src/pages/ApiProxy.tsx`（+21 / -3）
+
+### 本轮对话的其他排查结论（未改动代码，供后续参考）
+
+1. **公网延迟**：`https://antigravity-remote-api.ai95.indevs.in` 实测 TTFB ≈ 1.0s，本地 8045 直连 ≈ 2ms，同请求本地 3.4~3.9s vs 公网 4.4~6.7s，即 CF 隧道仅占约 1s。`ping` CF Tunnel 接入 IP 198.41.192.27 约 254ms（`ping 1.1.1.1` 仅 96ms），connector 连到 lax01/lax05/lax11/sjc01（全美西）。
+2. **`--region hkg` 不可用**：免费版报 `Could not lookup srv records on _hkg-v2-origintunneld._tcp.argotunnel.com`，SRV 记录不存在，属付费能力。
+3. **`--edge-ip-version 4` 无效**：强制 IPv4 后仍连美西机房，CF 按 IP 段分配，无法改变。
+4. **`--ha-connections` 参数不存在**：cloudflared 2026.10.0 的 global 与 `tunnel run` 帮助中均无此参数。
+5. **上游耗时拆解**：经 51081 代理到 `cloudcode-pa.googleapis.com` 约 1.2s；6s 首字 ≈ 2.3s Gemini 推理 + 1.2s 代理 + 1.0s CF + 波动。直连 1.1.1.1:443 超时（8s），换 DNS 反而更慢。
+6. **封号风险**：`accounts/` 下 33 个账号全部有独立且唯一的 `device_profile`（machine_id / mac_machine_id 均无重复）。剩余风险为 33 号共用单一出口 IP（`socks5h://127.0.0.1:51081`）与进程级共用 `x-vscode-sessionid`；后者经核实符合官方一次启动一个 session 的真实行为，不建议改动（曾误判为需修复，已撤回）。
+7. **请求节奏**：真实日志显示请求间隔 5~15 秒，天然错峰，无需额外并发控制。
+
+## 核心动机与背景 (Motivation & Background)
+- 用户要求：确认为真实 bug 后修复，子代理检查，通过后提交并打 tag 推送
+- 用户偏好：一次性闭环、代码改动先交子代理检查再主代理二次核验
+
+## 待办事项 (Next Steps)
+- [x] 确认 bug 成立（三处后端兜底逻辑 + 前端短路）
+- [x] 修复前端 helper 与默认值
+- [x] tsc / vite build / check-version 全绿
+- [x] 子代理 code-reviewer 审查通过
+- [ ] commit + tag v4.8.37 + push origin
+- [ ] CI 编译验证（本机无 cargo）
+- [ ] 用户拉新包真机验证：UI 显示与实际压缩行为一致
+
+## 已知遗留（非本次引入，未处理）
+- `enable_usage_scaling` 无独立 UI 开关，只能随「选 High」间接触发；若产品要求独立开关需另开任务
+- `compression_level` 类型为 `string` 而非联合类型，无编译期拼写保护
+- 前端默认值与后端多处默认值存在人肉同步风险
+
+## 关键上下文
+- 目录: `D:\Desktop\Super-File\AI-IDE\AI\反重力\Antigravity-Manager`
+- 分支: `main`，修复前 HEAD = `69949598`（v4.8.36）
+- 远端: origin = `github.com/Huo-zai-feng-lang-li/Antigravity-Manager`
+- 快照: `snap-1793788260314-n9kkyu`（修复前）
+- 本机无 Rust 工具链，Rust 验证只能靠 CI
+
+---
+
+# 历史接续状态 (2026-10-26 12:10)
 
 ### 当前版本：v4.8.36（修复 cloudflared 自定义域名被日志覆盖）
 

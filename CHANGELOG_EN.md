@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.37 (2026-11-04)**:
+        -   **[Fix: Context Compression Level UI Desynced from Backend]**:
+            -   `ApiProxy.tsx`: Fixed a bug where the "Intelligent Context Compression Level" selector showed "Disabled" while the backend `get_global_compression_level()` actually returned `high`, triggered when `compression_level="disabled"` and `enable_usage_scaling=true` were both present.
+            -   Root cause: in `compression_level || (enable_usage_scaling ? 'high' : 'disabled')`, the non-empty string `"disabled"` short-circuits `||`, so neither the select value nor the conditional render reached the fallback branch.
+            -   Added a `getEffectiveCompressionLevel()` helper whose logic matches the three backend sites (`config.rs`, `claude.rs`, `openai.rs`) exactly; both the select value and the threshold panel visibility now use it.
+            -   Corrected the frontend `experimental` fallback default from `enable_usage_scaling: true` to `false` and added `compression_level: 'disabled'`, aligning with the backend `ExperimentalConfig::default()` so new users no longer silently land in high compression.
+            -   Benefit: UI now reflects actual runtime behavior, preventing users from unknowingly paying for history rewriting, Prompt Cache invalidation, and higher time-to-first-token.
     *   **v4.8.36 (2026-10-26)**:
         -   **[Cloudflared Custom Domain Override Fix]**:
             -   `cloudflared.rs`: Fixed a bug where the user-configured `custom_domain` was overridden by log parsing in named tunnel mode.

@@ -3,6 +3,13 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.37 (2026-11-04)**:
+        -   **[上下文压缩等级 UI 与后端判定不一致修复]**:
+            -   `ApiProxy.tsx`：修复「智能上下文压缩等级」在 `compression_level="disabled"` 且 `enable_usage_scaling=true` 时，UI 显示「关闭」但后端 `get_global_compression_level()` 实际返回 `high` 的问题。
+            -   原因为前端 `compression_level || (enable_usage_scaling ? 'high' : 'disabled')` 中，非空字符串 `"disabled"` 使 `||` 短路，条件渲染与下拉框取值均未走兜底分支。
+            -   新增 `getEffectiveCompressionLevel()` 辅助函数，判定逻辑与后端 `config.rs`、`claude.rs`、`openai.rs` 三处完全对齐；下拉框 value 与阈值面板的显示条件统一改走该函数。
+            -   前端 `experimental` 兜底默认值由 `enable_usage_scaling: true` 修正为 `false`，并补全 `compression_level: 'disabled'`，与后端 `ExperimentalConfig::default()` 一致，杜绝新用户默认进入隐式高压缩状态。
+            -   收益：UI 展示与实际执行行为一致，避免用户误以为已关闭压缩却仍在承担历史重写、Prompt Cache 失效与首字延迟上升的代价。
     *   **v4.8.36 (2026-10-26)**:
         -   **[Cloudflared 自定义域名防覆盖]**:
             -   `cloudflared.rs`：修复在命名隧道模式下，用户配置的 `custom_domain` 被日志解析覆盖的 Bug。

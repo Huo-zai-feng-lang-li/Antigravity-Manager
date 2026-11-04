@@ -39,6 +39,22 @@ import CircuitBreaker from '../components/settings/CircuitBreaker';
 import AdvancedThinking from '../components/settings/AdvancedThinking';
 import { CircuitBreakerConfig } from '../types/config';
 
+/**
+ * 计算「有效的上下文压缩等级」，与后端 get_global_compression_level() 判定逻辑保持一致。
+ *
+ * 后端规则（src-tauri/src/proxy/config.rs）：
+ *   level == "disabled" 且 enable_usage_scaling == true 时，实际返回 "high"。
+ *
+ * 若此处不遵循同样规则，UI 会显示「关闭」但后端实际跑 high，用户误以为已关闭。
+ */
+function getEffectiveCompressionLevel(exp?: ExperimentalConfig): string {
+    const level = exp?.compression_level || 'disabled';
+    if (level === 'disabled') {
+        return exp?.enable_usage_scaling ? 'high' : 'disabled';
+    }
+    return level;
+}
+
 interface ProxyStatus {
     running: boolean;
     port: number;
@@ -771,7 +787,9 @@ export default function ApiProxy() {
                 ...appConfig.proxy,
                 experimental: {
                     ...(appConfig.proxy.experimental || {
-                        enable_usage_scaling: true,
+                        // 与后端 ExperimentalConfig::default() 对齐（默认关闭激进缩放）
+                        enable_usage_scaling: false,
+                        compression_level: 'disabled',
                         context_compression_threshold_l1: 0.4,
                         context_compression_threshold_l2: 0.55,
                         context_compression_threshold_l3: 0.7
@@ -2011,7 +2029,7 @@ print(response.choices[0].message.content)`;
                                         </div>
                                         <select
                                             className="select select-sm select-bordered w-48 text-xs font-normal focus:outline-none dark:bg-base-300 dark:text-base-content border-gray-200 dark:border-base-400"
-                                            value={appConfig.proxy.experimental?.compression_level || (appConfig.proxy.experimental?.enable_usage_scaling ? 'high' : 'disabled')}
+                                            value={getEffectiveCompressionLevel(appConfig.proxy.experimental)}
                                             onChange={(e) => {
                                                 const val = e.target.value;
                                                 updateExperimentalConfig({
@@ -2027,7 +2045,7 @@ print(response.choices[0].message.content)`;
                                         </select>
                                     </div>
 
-                                    {((appConfig.proxy.experimental?.compression_level || (appConfig.proxy.experimental?.enable_usage_scaling ? 'high' : 'disabled')) === 'high') && (
+                                    {(getEffectiveCompressionLevel(appConfig.proxy.experimental) === 'high') && (
                                         <>
                                             {/* L1 Threshold */}
                                             <div className="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">

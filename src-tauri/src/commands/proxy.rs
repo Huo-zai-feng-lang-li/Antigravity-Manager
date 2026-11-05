@@ -1,4 +1,4 @@
-use crate::modules::cloudflared::kill_all_cloudflared_processes;
+use crate::modules::cloudflared::kill_cloudflared_by_path;
 use crate::proxy::monitor::{ProxyMonitor, ProxyRequestLog, ProxyStats};
 use crate::proxy::{ProxyConfig, ProxyPoolConfig, TokenManager};
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,12 @@ pub async fn internal_start_proxy_service(
         }
     };
     if !cf_managed {
-        kill_all_cloudflared_processes();
+        // 仅清理本程序管理的 cloudflared（按 ExecutablePath 精确匹配，避免误杀其他项目的隧道）
+        let bin_path = {
+            let manager_guard = cloudflared_state.manager.read().await;
+            manager_guard.as_ref().map(|m| m.bin_path().to_path_buf())
+        };
+        kill_cloudflared_by_path(bin_path.as_deref());
     }
 
     // 1. 检查状态并加锁

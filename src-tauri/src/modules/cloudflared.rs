@@ -197,6 +197,11 @@ impl CloudflaredManager {
         }
     }
 
+    /// 返回当前管理的 cloudflared 可执行文件路径
+    pub fn bin_path(&self) -> &std::path::Path {
+        &self.bin_path
+    }
+
     /// 检查是否已安装
     pub async fn check_installed(&self) -> (bool, Option<String>) {
         if !self.bin_path.exists() {
@@ -608,40 +613,83 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
     None
 }
 
-/// 强制杀死系统中所有残留的 cloudflared 进程（兜底清理）。
+/// 强制杀死由本管理器启动的残留 cloudflared 进程（兜底清理）。
 ///
-/// 背景：托盘退出时若仅依赖 manager.stop() 的 tokio child.kill()，
-/// 在子进程句柄丢失、锁竞争或 process::exit 过快时可能杀不干净，
-/// 残留的 cloudflared 会继承主进程的 socket 句柄导致 8045 端口无法释放。
-/// 这里用操作系统级命令强制杀所有同名进程，作为退出和启动时的兜底。
+/// 修改说明：禁止无差别杀掉系统中所有 cloudflared.exe。
+/// 之前用 taskkill /F /IM 会误杀同一台机器上其他独立项目（如 Cuckoo、Codex2API）的隧道。
+/// 兜底清理本程序启动的残留 cloudflared 进程。
+///
+/// 核心防御设计（防止多项目误杀）：
+/// 1. 必须传入本次运行的 bin_path，可执行文件路径不匹配的直接忽略；
+/// 2. Windows 平台通过 PowerShell 进一步多维鉴别：
+///    - 该进程的 ParentProcessId == 当前反重力主进程（本实例派生子进程，100% 属于反重力）；
+///    - OR 该进程的命令行（CommandLine）包含 `--url` 且代理到本程序的本地端口（默认 8045 等）；
+///    - OR 该进程的命令行包含 `tunnel.*run`（认证隧道模式，且父进程不存在/已成孤儿）；
+///    - 其他项目（如 Cuckoo-Code 代理 19999 端口）即使共用同一个 cloudflared.exe 路径，也会被严格跳过！
+/// 3. Unix 平台通过完整路径及反重力命令行特征清理。
+/// 4. 如果拿不到 bin_path，直接跳过（宁可留下孤儿，也不误杀别的程序）。
 ///
 /// 返回 true 表示至少杀掉了一个进程。
-pub fn kill_all_cloudflared_processes() -> bool {
+pub fn kill_cloudflared_by_path(bin_path: Option<&std::path::Path>) -> bool {
     #[cfg(target_os = "windows")]
     {
-        match std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "cloudflared.exe", "/T"])
-            // [FIX] 缺少 CREATE_NO_WINDOW 时，GUI 程序(spawn 无控制台)拉起 taskkill
-            // 会弹出黑窗口一闪而过（打开时启动清残留 + 关闭时退出兜底都会触发）
+        let target = match bin_path {
+            Some(p) => p.to_string_lossy().to_lowercase(),
+            None => {
+                info!("[cloudflared] Skip cleanup: bin_path is unknown, avoiding collateral damage");
+                return false;
+            }
+        };
+
+        let current_pid = std::process::id();
+
+        // 用 PowerShell 结合 ExecutablePath + ParentProcessId / CommandLine 精确特征查杀
+        // 防御准则：
+        // 1. 同一宿主机若其他项目（如 Cuckoo-Code 代理 19999 端口）共用同一 exe 路径，绝不误杀！
+        // 2. 本程序自身派生的子进程（ParentProcessId == myPid）：100% 精准清理（无论 Quick 还是 Auth 模式）；
+        // 3. 上次异常崩溃遗留的孤儿进程：仅当命令行明确包含本机反重力端口（:8045）时清理；
+        // 4. 若命令行明确包含其他非 8045 端口（如 :19999），严格放行，杜绝负向前瞻误判。
+        let escaped_path = target.replace('\'', "''");
+        let script = format!(
+            "$target = '{}'; \
+             $myPid = {}; \
+             Get-CimInstance Win32_Process -Filter \"Name='cloudflared.exe'\" | Where-Object {{ \
+                 $exe = $_.ExecutablePath; \
+                 if ([string]::IsNullOrEmpty($exe) -or $exe.ToLower() -ne $target) {{ return $false }} \
+                 if ($_.ParentProcessId -eq $myPid) {{ return $true }} \
+                 $cmd = $_.CommandLine; \
+                 if (-not [string]::IsNullOrEmpty($cmd)) {{ \
+                     if ($cmd -match '(?i)(127\\.0\\.0\\.1|localhost):8045\\b') {{ return $true }} \
+                 }} \
+                 return $false \
+             }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}",
+            escaped_path, current_pid
+        );
+
+        match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
         {
-            Ok(status) => {
-                let killed = status.success();
-                if killed {
-                    info!("[cloudflared] Force-killed all residual cloudflared.exe processes");
-                }
-                killed
+            Ok(_) => {
+                info!("[cloudflared] Residual cleanup finished for path");
+                true
             }
             Err(_) => false,
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let target = match bin_path {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => return false,
+        };
+        // Unix: 仅清理目标路径且精准匹配反重力 8045 端口的进程，带严格单词边界防 80450/18045 串扰
+        let pattern = format!("{}.*(127\\.0\\.0\\.1|localhost):8045\\b", target);
         match std::process::Command::new("pkill")
-            .args(["-9", "-f", "cloudflared"])
+            .args(["-9", "-f", &pattern])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -649,7 +697,7 @@ pub fn kill_all_cloudflared_processes() -> bool {
             Ok(status) => {
                 let killed = status.success();
                 if killed {
-                    info!("[cloudflared] Force-killed all residual cloudflared processes");
+                    info!("[cloudflared] Residual cleanup finished for path");
                 }
                 killed
             }

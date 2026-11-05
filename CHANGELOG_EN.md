@@ -3,6 +3,14 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.39 (2026-11-06)**:
+        -   **[Fix: cloudflared fallback cleanup no longer kills other projects' tunnels]**:
+            -   `cloudflared.rs`: renamed `kill_all_cloudflared_processes()` to `kill_cloudflared_by_path(bin_path)`. Instead of `taskkill /F /IM cloudflared.exe` (which killed every cloudflared on the machine by process name), it now uses PowerShell `Get-CimInstance` to match `ExecutablePath` against the binary managed by this app, then kills only those.
+            -   Root cause: a single machine may run several independent projects (e.g. Cuckoo-Code, Codex2API), each spawning its own cloudflared tunnel. The old logic ran `taskkill /IM` on app start, service stop, tray quit and app exit, which also tore down the other projects' tunnels and turned their public hostnames into 530 errors.
+            -   All three call sites (`proxy.rs`, `tray.rs`, `lib.rs`) now resolve `manager.bin_path()` first and pass it in. If the path cannot be resolved, the cleanup is skipped entirely (prefer an orphan process over collateral damage).
+            -   Linux/macOS switched to `pkill -9 -f <full path>` for an exact match.
+            -   Added a `bin_path()` getter on `CloudflaredManager` so callers can read the managed binary path.
+            -   Benefit: starting or stopping Antigravity no longer affects other cloudflared tunnels running on the same host.
     *   **v4.8.38 (2026-11-04)**:
         -   **[Fix: Sticky Sessions Completely Inert on /v1/responses]**:
             -   `openai.rs`: `responses_routing_session_id()` now accepts `prompt_cache_key` and `content_fallback`. Priority is `session_id` > `prompt_cache_key` > `stored_routing_session_id` > `previous_response_id` > `content_fallback` > random UUID.

@@ -3,6 +3,14 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.8.39 (2026-11-06)**:
+        -   **[修复 cloudflared 兜底清理误杀其他项目隧道]**:
+            -   `cloudflared.rs`：将 `kill_all_cloudflared_processes()` 重命名为 `kill_cloudflared_by_path(bin_path)`，从「`taskkill /F /IM cloudflared.exe` 按进程名无差别杀」改为「用 PowerShell `Get-CimInstance` 按 `ExecutablePath` 精确匹配本程序管理的二进制路径后再杀」。
+            -   根因：同一台机器上可能同时运行多个独立项目（如 Cuckoo-Code、Codex2API），它们各自启动了 cloudflared 隧道。旧逻辑在反重力启动、停止、托盘退出、应用退出时都会执行 `taskkill /IM`，把其他项目的隧道一并杀掉，导致对方公网域名瞬间变成 530。
+            -   `proxy.rs` / `tray.rs` / `lib.rs` 三个调用点全部改为先取 `manager.bin_path()` 再传参；拿不到路径时直接跳过清理（宁可留孤儿进程，也不误杀别的程序）。
+            -   Linux/macOS 同步改为 `pkill -9 -f <完整路径>` 精确匹配。
+            -   `CloudflaredManager` 新增 `bin_path()` getter 供外部读取受管二进制路径。
+            -   收益：多项目共存时反重力的启停不再影响其他 cloudflared 隧道。
     *   **v4.8.38 (2026-11-04)**:
         -   **[修复 /v1/responses 粘性会话完全失效]**:
             -   `openai.rs`：`responses_routing_session_id()` 新增 `prompt_cache_key` 与 `content_fallback` 两个来源，优先级调整为 `session_id` > `prompt_cache_key` > `stored_routing_session_id` > `previous_response_id` > `content_fallback` > 随机 UUID。

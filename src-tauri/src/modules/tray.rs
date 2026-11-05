@@ -1,5 +1,5 @@
 use crate::modules;
-use crate::modules::cloudflared::kill_all_cloudflared_processes;
+use crate::modules::cloudflared::kill_cloudflared_by_path;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -117,7 +117,7 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                             }
                         }
                         // 3. 优雅停止 cloudflared 隧道（2 秒超时）
-                        if let Some(manager) = cf_manager {
+                        if let Some(manager) = &cf_manager {
                             let manager_lock = manager.read().await;
                             if let Some(mgr) = manager_lock.as_ref() {
                                 let _ = tokio::time::timeout(
@@ -129,7 +129,15 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         }
                         // 4. 兜底：强制杀所有残留 cloudflared 进程
                         //    防止子进程句柄丢失或退出过快导致孤儿进程继承 socket 句柄、占用 8045 端口
-                        kill_all_cloudflared_processes();
+                        // 仅清理本程序启动的残留 cloudflared（按路径精确匹配）
+                        // 不能按进程名批量杀，否则会误伤同一台机器上其他项目的隧道
+                        let bin_path = if let Some(manager) = &cf_manager {
+                            let guard = manager.read().await;
+                            guard.as_ref().map(|m| m.bin_path().to_path_buf())
+                        } else {
+                            None
+                        };
+                        kill_cloudflared_by_path(bin_path.as_deref());
                         // 5. 给 server 和子进程足够时间释放端口（从 100ms 提到 500ms）
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         std::process::exit(0);

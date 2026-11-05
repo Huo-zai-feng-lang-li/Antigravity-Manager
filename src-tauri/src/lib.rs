@@ -8,7 +8,7 @@ mod modules;
 mod proxy; // Proxy service module
 mod utils;
 
-use modules::cloudflared::kill_all_cloudflared_processes;
+use modules::cloudflared::kill_cloudflared_by_path;
 use modules::logger;
 use std::sync::Arc;
 use tauri::Manager;
@@ -774,9 +774,18 @@ pub fn run() {
                             }
                         });
                     }
-                    // 兜底：无论优雅停止是否成功，强制杀所有残留 cloudflared 进程
+                    // 兜底：仅清理本程序启动的残留 cloudflared 进程（按路径精确匹配）
                     // 防止孤儿进程继承 socket 句柄导致 8045 端口无法释放
-                    kill_all_cloudflared_processes();
+                    // ⚠️ 不能按进程名批量杀，否则会误伤同一台机器上其他项目的隧道
+                    let bin_path = if let Some(cf_state) =
+                        app_handle.try_state::<crate::commands::cloudflared::CloudflaredState>()
+                    {
+                        let guard = tauri::async_runtime::block_on(cf_state.manager.read());
+                        guard.as_ref().map(|m| m.bin_path().to_path_buf())
+                    } else {
+                        None
+                    };
+                    kill_cloudflared_by_path(bin_path.as_deref());
                     // 停止 Admin Server（8045 监听）并等待任务真正结束，确保端口释放
                     if let Some(state) =
                         app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
